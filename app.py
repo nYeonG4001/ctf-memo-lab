@@ -1,5 +1,9 @@
 import sqlite3
-from flask import Flask, g, redirect, request, session, url_for
+from datetime import datetime
+from functools import wraps
+
+from flask import Flask, abort, g, redirect, request, session, url_for
+from markupsafe import escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -105,11 +109,103 @@ PAGE_STYLE = """
         border-color: #2f80ed;
         text-decoration: none;
     }
+    .card.wide {
+        max-width: 640px;
+    }
+    form {
+        margin: 0;
+    }
+    textarea {
+        width: 100%;
+        min-height: 160px;
+        padding: 8px 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        font-size: 14px;
+        font-family: inherit;
+        resize: vertical;
+    }
+    textarea:focus {
+        outline: none;
+        border-color: #2f80ed;
+    }
+    .toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+    }
+    .toolbar h1 {
+        margin: 0;
+    }
+    .memo-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .memo-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid #ededec;
+    }
+    .memo-item:last-child {
+        border-bottom: none;
+    }
+    .memo-item a {
+        color: #37352f;
+        font-size: 15px;
+    }
+    .memo-item a:hover {
+        color: #2f80ed;
+        text-decoration: none;
+    }
+    .memo-date {
+        font-size: 12px;
+        color: #9b9a97;
+    }
+    .memo-content {
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        margin: 16px 0 24px;
+    }
+    .btn-row {
+        display: flex;
+        gap: 12px;
+        margin-top: 8px;
+    }
+    .btn-row a,
+    .btn-row form {
+        flex: 1;
+    }
+    .btn-row a,
+    .btn-row button {
+        display: block;
+        width: 100%;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #e0e0e0;
+        background: #ffffff;
+        color: #37352f;
+        font-size: 14px;
+        font-family: inherit;
+        text-align: center;
+        text-decoration: none;
+        cursor: pointer;
+    }
+    .btn-row a:hover,
+    .btn-row button:hover {
+        border-color: #2f80ed;
+        text-decoration: none;
+    }
 </style>
 """
 
 
-def render_page(title, body):
+def render_page(title, body, wide=False):
+    card_class = "card wide" if wide else "card"
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -118,7 +214,7 @@ def render_page(title, body):
 {PAGE_STYLE}
 </head>
 <body>
-<div class="card">
+<div class="{card_class}">
 {body}
 </div>
 </body>
@@ -152,7 +248,40 @@ def init_db():
             )
             """
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+            """
+        )
         db.commit()
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def get_own_memo(memo_id):
+    db = get_db()
+    memo = db.execute(
+        "SELECT * FROM memos WHERE id = ? AND user_id = ?",
+        (memo_id, session["user_id"]),
+    ).fetchone()
+    if memo is None:
+        abort(404)
+    return memo
 
 
 @app.route("/")
@@ -160,7 +289,10 @@ def index():
     if "username" in session:
         body = f"""
         <h1>환영합니다, {session['username']}님</h1>
-        <a href="{url_for('logout')}">로그아웃</a>
+        <div class="links">
+            <a href="{url_for('memo_list')}" class="primary">메모 목록</a>
+            <a href="{url_for('logout')}">로그아웃</a>
+        </div>
         """
         return render_page("메모 서비스", body)
 
@@ -245,6 +377,7 @@ def login():
             return render_page("로그인", body)
 
         session["username"] = user["username"]
+        session["user_id"] = user["id"]
         return redirect(url_for("index"))
 
     body = """
@@ -267,7 +400,184 @@ def login():
 @app.route("/logout")
 def logout():
     session.pop("username", None)
+    session.pop("user_id", None)
     return redirect(url_for("index"))
+
+
+@app.route("/memos")
+@login_required
+def memo_list():
+    db = get_db()
+    memos = db.execute(
+        "SELECT id, title, created_at FROM memos WHERE user_id = ? ORDER BY id DESC",
+        (session["user_id"],),
+    ).fetchall()
+
+    if memos:
+        items = "".join(
+            f"""
+            <li class="memo-item">
+                <a href="{url_for('memo_detail', memo_id=memo['id'])}">{escape(memo['title'])}</a>
+                <span class="memo-date">{memo['created_at']}</span>
+            </li>
+            """
+            for memo in memos
+        )
+        list_html = f'<ul class="memo-list">{items}</ul>'
+    else:
+        list_html = '<p class="msg">작성한 메모가 없습니다.</p>'
+
+    body = f"""
+    <div class="toolbar">
+        <h1>내 메모</h1>
+        <a href="{url_for('memo_new')}">새 메모</a>
+    </div>
+    {list_html}
+    <a href="{url_for('index')}">홈으로</a>
+    """
+    return render_page("내 메모", body, wide=True)
+
+
+@app.route("/memos/new", methods=["GET", "POST"])
+@login_required
+def memo_new():
+    if request.method == "POST":
+        title = request.form["title"]
+        content = request.form["content"]
+
+        if not title or not content:
+            body = f"""
+            <h1>새 메모</h1>
+            <p class="msg">제목과 내용을 모두 입력해주세요.</p>
+            <form method="post">
+                <div class="field">
+                    <label for="title">제목</label>
+                    <input type="text" id="title" name="title" value="{escape(title)}">
+                </div>
+                <div class="field">
+                    <label for="content">내용</label>
+                    <textarea id="content" name="content">{escape(content)}</textarea>
+                </div>
+                <input type="submit" value="저장">
+            </form>
+            """
+            return render_page("새 메모", body, wide=True)
+
+        db = get_db()
+        db.execute(
+            "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+            (
+                session["user_id"],
+                title,
+                content,
+                datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ),
+        )
+        db.commit()
+        return redirect(url_for("memo_list"))
+
+    body = """
+    <h1>새 메모</h1>
+    <form method="post">
+        <div class="field">
+            <label for="title">제목</label>
+            <input type="text" id="title" name="title">
+        </div>
+        <div class="field">
+            <label for="content">내용</label>
+            <textarea id="content" name="content"></textarea>
+        </div>
+        <input type="submit" value="저장">
+    </form>
+    """
+    return render_page("새 메모", body, wide=True)
+
+
+@app.route("/memos/<int:memo_id>")
+@login_required
+def memo_detail(memo_id):
+    memo = get_own_memo(memo_id)
+
+    body = f"""
+    <div class="toolbar">
+        <h1>{escape(memo['title'])}</h1>
+    </div>
+    <p class="memo-date">{memo['created_at']}</p>
+    <div class="memo-content">{escape(memo['content'])}</div>
+    <div class="btn-row">
+        <a href="{url_for('memo_edit', memo_id=memo['id'])}">수정</a>
+        <form method="post" action="{url_for('memo_delete', memo_id=memo['id'])}">
+            <button type="submit">삭제</button>
+        </form>
+    </div>
+    <a href="{url_for('memo_list')}">목록으로</a>
+    """
+    return render_page(str(escape(memo["title"])), body, wide=True)
+
+
+@app.route("/memos/<int:memo_id>/edit", methods=["GET", "POST"])
+@login_required
+def memo_edit(memo_id):
+    memo = get_own_memo(memo_id)
+
+    if request.method == "POST":
+        title = request.form["title"]
+        content = request.form["content"]
+
+        if not title or not content:
+            body = f"""
+            <h1>메모 수정</h1>
+            <p class="msg">제목과 내용을 모두 입력해주세요.</p>
+            <form method="post">
+                <div class="field">
+                    <label for="title">제목</label>
+                    <input type="text" id="title" name="title" value="{escape(title)}">
+                </div>
+                <div class="field">
+                    <label for="content">내용</label>
+                    <textarea id="content" name="content">{escape(content)}</textarea>
+                </div>
+                <input type="submit" value="수정 완료">
+            </form>
+            """
+            return render_page("메모 수정", body, wide=True)
+
+        db = get_db()
+        db.execute(
+            "UPDATE memos SET title = ?, content = ? WHERE id = ? AND user_id = ?",
+            (title, content, memo_id, session["user_id"]),
+        )
+        db.commit()
+        return redirect(url_for("memo_detail", memo_id=memo_id))
+
+    body = f"""
+    <h1>메모 수정</h1>
+    <form method="post">
+        <div class="field">
+            <label for="title">제목</label>
+            <input type="text" id="title" name="title" value="{escape(memo['title'])}">
+        </div>
+        <div class="field">
+            <label for="content">내용</label>
+            <textarea id="content" name="content">{escape(memo['content'])}</textarea>
+        </div>
+        <input type="submit" value="수정 완료">
+    </form>
+    """
+    return render_page("메모 수정", body, wide=True)
+
+
+@app.route("/memos/<int:memo_id>/delete", methods=["POST"])
+@login_required
+def memo_delete(memo_id):
+    get_own_memo(memo_id)
+    db = get_db()
+    db.execute(
+        "DELETE FROM memos WHERE id = ? AND user_id = ?",
+        (memo_id, session["user_id"]),
+    )
+    db.commit()
+    return redirect(url_for("memo_list"))
 
 
 if __name__ == "__main__":
