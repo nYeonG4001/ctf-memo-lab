@@ -577,7 +577,16 @@ def get_own_memo(memo_id):
 
 
 def compute_scores(db):
-    users = db.execute("SELECT id, username FROM users ORDER BY id").fetchall()
+    # 제출 이력이 한 번도 없는 계정(아직 발견/탈취되지 않은 시드 계정 포함)은 목록에서 제외합니다.
+    # 그래야 로그인만 하면 관리자스러운 계정 이름들이 점수판에서 미리 다 보이는 걸 막을 수 있습니다.
+    users = db.execute(
+        """
+        SELECT DISTINCT u.id, u.username
+        FROM users u
+        JOIN submissions s ON s.user_id = u.id
+        ORDER BY u.id
+        """
+    ).fetchall()
 
     first_blood_row = db.execute(
         "SELECT user_id FROM submissions WHERE is_correct = 1 ORDER BY id ASC LIMIT 1"
@@ -647,8 +656,8 @@ def index():
         <div class="links">
             <a href="{url_for('submit_flag')}">플래그 제출</a>
             <a href="{url_for('scoreboard')}">점수판</a>
+            {admin_link}
         </div>
-        {admin_link}
         """
         return render_page("메모 서비스", body)
 
