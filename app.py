@@ -47,11 +47,22 @@ DECOY_MEMOS = [
 
 # 검증 없이 아무거나 제출하는 참가자를 거르기 위한 가짜 플래그.
 # 진짜 플래그(ADMIN_MEMO_CONTENT)와 형식만 같고 값은 다릅니다.
+# FAKE_FLAG_CONTENT: 가짜 관리자 계정(DECOY_ADMIN_ACCOUNTS)에 항상 심어지는 기본 가짜 플래그.
+# FAKE_FLAG_CONTENT_2/3: DECOY_MEMOS 풀에 섞여서 admin 본인 메모함/가짜 관리자 계정 미끼에 랜덤 등장.
 FAKE_FLAG_CONTENT = "SBOB{n0t_th3_r34l_fl4g}"
+FAKE_FLAG_CONTENT_2 = "SBOB{4lm0st_g0t_1t}"
+FAKE_FLAG_CONTENT_3 = "SBOB{w40n9_4cc0unt_bud}"
 
 # /submit에서 오답 감점(-10점) 판정에 쓰는 가짜 플래그 전체 목록.
 # 지금까지 심어둔 가짜 플래그를 전부 등록해두세요 (여러 개면 콤마로 추가).
-FAKE_FLAGS = [FAKE_FLAG_CONTENT]
+FAKE_FLAGS = [FAKE_FLAG_CONTENT, FAKE_FLAG_CONTENT_2, FAKE_FLAG_CONTENT_3]
+
+# DECOY_MEMOS 풀에 가짜 플래그 2개를 평범한 제목으로 섞어 넣습니다.
+# (admin 본인 메모함에는 항상 포함되고, 가짜 관리자 계정 미끼에는 랜덤으로 섞여 들어갑니다.)
+DECOY_MEMOS += [
+    ("백업 메모", FAKE_FLAG_CONTENT_2),
+    ("예전 설정값", FAKE_FLAG_CONTENT_3),
+]
 
 # "administrator", "superadmin" 처럼 관리자스러운 이름을 쓰지만 실제 role은 "user"인 가짜 관리자
 # 계정입니다. 진짜 admin 권한은 없고, 착각을 유도하는 용도입니다. (비밀번호는 자유롭게 변경하세요.)
