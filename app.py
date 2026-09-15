@@ -4,7 +4,7 @@ import re
 import secrets
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Flask, abort, g, redirect, request, session, url_for
@@ -28,16 +28,47 @@ DATABASE = "memo.db"
 #  참가자가 해킹 없이 소스만 읽고 정답을 알 수 있습니다.)
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme_before_game")
-ADMIN_MEMO_TITLE = "관리자 메모"
+# 제목만 보고 플래그 메모를 특정할 수 없도록 평범한 제목을 씁니다 ("관리자 메모" 같은 티 나는 제목 지양).
+ADMIN_MEMO_TITLE = "인수인계"
 ADMIN_MEMO_CONTENT = os.environ.get("ADMIN_MEMO_CONTENT", "SBOB{replace_this_before_game}")
 
 # admin 계정 최초 생성 시 플래그 메모와 함께 만들어지는 미끼 메모들.
-# 플래그 메모가 목록에서 튀지 않도록 섞는 용도이니, 평범한 업무 메모 톤으로 자유롭게 수정하세요.
+# 플래그 메모가 목록에서 튀지 않도록 섞는 용도이니, 평범한 업무/일상 메모 톤으로 자유롭게 수정하세요.
 DECOY_MEMOS = [
     ("회의 메모", "다음 주 배포 일정 논의 필요"),
     ("임시 저장", "작성 중..."),
     ("서버 점검 기록", "9/15 새벽 점검 완료, 특이사항 없음"),
     ("장보기", "우유, 계란, 식빵"),
+    ("TODO", "리뷰 남기기, 문서 정리, 백업 확인"),
+    ("회의록", "스프린트 회고 - 다음 스프린트 목표 정리"),
+    ("휴가 계획", "다음 달 초 3일 휴가 예정"),
+    ("비밀번호 힌트", "까먹을 때 대비용 메모 (실제로는 안 씀)"),
+]
+
+# 검증 없이 아무거나 제출하는 참가자를 거르기 위한 가짜 플래그.
+# 진짜 플래그(ADMIN_MEMO_CONTENT)와 형식만 같고 값은 다릅니다.
+FAKE_FLAG_CONTENT = "SBOB{n0t_th3_r34l_fl4g}"
+
+# "administrator", "superadmin" 처럼 관리자스러운 이름을 쓰지만 실제 role은 "user"인 가짜 관리자
+# 계정입니다. 진짜 admin 권한은 없고, 착각을 유도하는 용도입니다. (비밀번호는 자유롭게 변경하세요.)
+DECOY_ADMIN_ACCOUNTS = [
+    ("administrator", "adm1n_d3c0y_pw1"),
+    ("superadmin", "adm1n_d3c0y_pw2"),
+]
+
+# 평범한 일반 유저 계정입니다. 계정을 탈취해도 진짜/가짜 플래그 없이 순수 미끼용 메모만 들어있습니다.
+DECOY_NORMAL_ACCOUNTS = [
+    ("kim_dev", "kim_pw_1234"),
+    ("park_intern", "park_pw_1234"),
+    ("lee_designer", "lee_pw_1234"),
+]
+
+# DECOY_NORMAL_ACCOUNTS 계정들의 메모함에 들어가는 순수 미끼 메모 (플래그 없음).
+DECOY_NORMAL_MEMOS = [
+    ("점심 메뉴", "김치찌개 vs 파스타 고민중"),
+    ("코드 리뷰", "PR #42 리뷰 남기기"),
+    ("readme 수정", "설치 방법 오타 고치기"),
+    ("일정", "다음 주 화요일 오후 미팅"),
 ]
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,20}$")
@@ -347,6 +378,13 @@ def ensure_column(db, table, column, definition):
         db.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
 
 
+def random_recent_timestamp(min_days_ago=1, max_days_ago=21):
+    # 시드 데이터가 전부 같은 시각에 생성된 티가 나지 않도록, 최근 며칠~몇 주 사이로 흩뿌립니다.
+    total_minutes = random.randint(min_days_ago * 24 * 60, max_days_ago * 24 * 60)
+    dt = datetime.now() - timedelta(minutes=total_minutes)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
 def init_db():
     with app.app_context():
         db = get_db()
@@ -397,20 +435,69 @@ def init_db():
             ).fetchone()["id"]
 
             # 플래그 메모가 목록 맨 위/아래에 고정되지 않도록, 미끼 메모들과 섞어서 저장합니다.
-            seed_memos = [(ADMIN_MEMO_TITLE, ADMIN_MEMO_CONTENT)] + list(DECOY_MEMOS)
-            random.shuffle(seed_memos)
+            # 작성일도 전부 같은 시각이 아니라 각각 랜덤하게 흩뿌립니다.
+            admin_seed_memos = [(ADMIN_MEMO_TITLE, ADMIN_MEMO_CONTENT)] + list(DECOY_MEMOS)
+            random.shuffle(admin_seed_memos)
 
-            for title, content in seed_memos:
+            for title, content in admin_seed_memos:
                 db.execute(
                     "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
-                    (
-                        admin_id,
-                        title,
-                        content,
-                        datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    ),
+                    (admin_id, title, content, random_recent_timestamp()),
                 )
             db.commit()
+
+            # 가짜 관리자 계정: 이름만 그럴듯하고 role은 "user"라 실제 admin 권한은 없습니다.
+            # 진짜 admin 메모와 같은 제목("인수인계")으로 가짜 플래그를 심어서 더 헷갈리게 합니다.
+            for username, password in DECOY_ADMIN_ACCOUNTS:
+                db.execute(
+                    "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        username,
+                        generate_password_hash(password),
+                        "user",
+                        random_recent_timestamp(),
+                    ),
+                )
+                db.commit()
+
+                user_id = db.execute(
+                    "SELECT id FROM users WHERE username = ?", (username,)
+                ).fetchone()["id"]
+
+                fake_admin_memos = [(ADMIN_MEMO_TITLE, FAKE_FLAG_CONTENT)] + random.sample(
+                    DECOY_MEMOS, k=min(2, len(DECOY_MEMOS))
+                )
+                random.shuffle(fake_admin_memos)
+                for title, content in fake_admin_memos:
+                    db.execute(
+                        "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                        (user_id, title, content, random_recent_timestamp()),
+                    )
+                db.commit()
+
+            # 순수 미끼 계정: 계정을 탈취해도 진짜/가짜 플래그 없이 평범한 메모만 나옵니다.
+            for username, password in DECOY_NORMAL_ACCOUNTS:
+                db.execute(
+                    "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        username,
+                        generate_password_hash(password),
+                        "user",
+                        random_recent_timestamp(),
+                    ),
+                )
+                db.commit()
+
+                user_id = db.execute(
+                    "SELECT id FROM users WHERE username = ?", (username,)
+                ).fetchone()["id"]
+
+                for title, content in DECOY_NORMAL_MEMOS:
+                    db.execute(
+                        "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                        (user_id, title, content, random_recent_timestamp()),
+                    )
+                db.commit()
 
 
 def login_required(view):
