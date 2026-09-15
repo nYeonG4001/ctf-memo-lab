@@ -11,6 +11,11 @@ app.secret_key = "dev-secret-key-change-me"
 
 DATABASE = "memo.db"
 
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin1234"
+ADMIN_MEMO_TITLE = "관리자 메모"
+ADMIN_MEMO_CONTENT = "SBOB{w3lc0me_4dm1n_p4n3l}"
+
 PAGE_STYLE = """
 <style>
     * { box-sizing: border-box; }
@@ -236,6 +241,12 @@ def close_connection(exception):
         db.close()
 
 
+def ensure_column(db, table, column, definition):
+    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
 def init_db():
     with app.app_context():
         db = get_db()
@@ -244,7 +255,9 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL
+                password TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT
             )
             """
         )
@@ -260,7 +273,38 @@ def init_db():
             )
             """
         )
+        ensure_column(db, "users", "role", "role TEXT NOT NULL DEFAULT 'user'")
+        ensure_column(db, "users", "created_at", "created_at TEXT")
         db.commit()
+
+        admin = db.execute(
+            "SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,)
+        ).fetchone()
+        if admin is None:
+            db.execute(
+                "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    ADMIN_USERNAME,
+                    generate_password_hash(ADMIN_PASSWORD),
+                    "admin",
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                ),
+            )
+            db.commit()
+
+            admin_id = db.execute(
+                "SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,)
+            ).fetchone()["id"]
+            db.execute(
+                "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    admin_id,
+                    ADMIN_MEMO_TITLE,
+                    ADMIN_MEMO_CONTENT,
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                ),
+            )
+            db.commit()
 
 
 def login_required(view):
@@ -268,6 +312,18 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         if "user_id" not in session:
             return redirect(url_for("login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        if session.get("role") != "admin":
+            return redirect(url_for("index"))
         return view(*args, **kwargs)
 
     return wrapped
@@ -287,12 +343,18 @@ def get_own_memo(memo_id):
 @app.route("/")
 def index():
     if "username" in session:
+        admin_link = (
+            f'<a href="{url_for("admin_dashboard")}">관리자 페이지</a>'
+            if session.get("role") == "admin"
+            else ""
+        )
         body = f"""
         <h1>환영합니다, {session['username']}님</h1>
         <div class="links">
             <a href="{url_for('memo_list')}" class="primary">메모 목록</a>
             <a href="{url_for('logout')}">로그아웃</a>
         </div>
+        {admin_link}
         """
         return render_page("메모 서비스", body)
 
@@ -334,8 +396,8 @@ def signup():
 
         hashed_password = generate_password_hash(password)
         db.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username, hashed_password),
+            "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+            (username, hashed_password, "user", datetime.now().strftime("%Y-%m-%d %H:%M")),
         )
         db.commit()
         return redirect(url_for("login"))
@@ -378,6 +440,7 @@ def login():
 
         session["username"] = user["username"]
         session["user_id"] = user["id"]
+        session["role"] = user["role"]
         return redirect(url_for("index"))
 
     body = """
@@ -401,6 +464,7 @@ def login():
 def logout():
     session.pop("username", None)
     session.pop("user_id", None)
+    session.pop("role", None)
     return redirect(url_for("index"))
 
 
@@ -578,6 +642,34 @@ def memo_delete(memo_id):
     )
     db.commit()
     return redirect(url_for("memo_list"))
+
+
+@app.route("/admin")
+@admin_required
+def admin_dashboard():
+    db = get_db()
+    users = db.execute(
+        "SELECT username, role, created_at FROM users ORDER BY id"
+    ).fetchall()
+
+    rows = "".join(
+        f"""
+        <li class="memo-item">
+            <span>{escape(u['username'])}{' (admin)' if u['role'] == 'admin' else ''}</span>
+            <span class="memo-date">{u['created_at'] or '-'}</span>
+        </li>
+        """
+        for u in users
+    )
+
+    body = f"""
+    <div class="toolbar">
+        <h1>회원 목록</h1>
+        <a href="{url_for('index')}">홈으로</a>
+    </div>
+    <ul class="memo-list">{rows}</ul>
+    """
+    return render_page("관리자", body, wide=True)
 
 
 if __name__ == "__main__":
