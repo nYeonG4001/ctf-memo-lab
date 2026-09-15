@@ -11,6 +11,11 @@ COPY app.py .
 ENV HOST=0.0.0.0
 ENV PORT=8000
 
+# memo.db를 /app/data 안에 두고 볼륨으로 마운트하면, 컨테이너를 내렸다 올려도
+# 회원/메모 데이터가 유지됩니다 (docker-compose.yml의 ./data:/app/data 참고).
+RUN mkdir -p /app/data
+ENV DATABASE=/app/data/memo.db
+
 EXPOSE 8000
 
 CMD ["python", "app.py"]

@@ -20,7 +20,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
 )
 
-DATABASE = "memo.db"
+DATABASE = os.environ.get("DATABASE", "memo.db")
 
 # !!! 아래 기본값은 전부 플레이스홀더입니다. 실제 게임에 쓰면 안 됩니다 !!!
 # 반드시 SECRET_KEY, ADMIN_PASSWORD, ADMIN_MEMO_CONTENT 환경변수로 덮어써서 실행하세요.
@@ -218,6 +218,7 @@ PAGE_STYLE = """
     }
     .links {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
     }
     .links + .links {
@@ -225,12 +226,12 @@ PAGE_STYLE = """
     }
     .links a,
     .links form {
-        flex: 1;
+        flex: 1 1 auto;
+        min-width: max-content;
     }
     .links a,
     .links button {
         display: block;
-        width: 100%;
         text-align: center;
         padding: 10px;
         border-radius: 6px;
@@ -239,6 +240,7 @@ PAGE_STYLE = """
         color: #37352f;
         font-size: 14px;
         font-family: inherit;
+        white-space: nowrap;
         cursor: pointer;
         text-decoration: none;
     }
@@ -643,7 +645,7 @@ def internal_notes():
 def index():
     if "username" in session:
         admin_link = (
-            f'<a href="{url_for("admin_dashboard")}">관리자 페이지</a>'
+            f'<a href="{url_for("admin_dashboard")}">관리자</a>'
             if session.get("role") == "admin"
             else ""
         )

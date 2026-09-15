@@ -12,6 +12,7 @@ venv/
 # 로컬 DB (사용자 계정/비밀번호 해시가 들어있다)
 *.db
 memo.db
+data/
 
 # 환경변수 (SECRET_KEY 등)
 .env
