@@ -1,4 +1,8 @@
+import os
+import secrets
 import sqlite3
+import time
+from collections import defaultdict
 from datetime import datetime
 from functools import wraps
 
@@ -7,14 +11,43 @@ from markupsafe import escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-key-change-me"
+# SECRET_KEY 환경변수를 설정하지 않으면 프로세스 시작마다 랜덤 키를 사용합니다.
+# (하드코딩된 고정 키는 알려지면 세션 쿠키를 위조해 관리자 권한을 탈취당할 수 있습니다.)
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 DATABASE = "memo.db"
 
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin1234"
+# !!! 아래 기본값은 전부 플레이스홀더입니다. 실제 게임에 쓰면 안 됩니다 !!!
+# 반드시 SECRET_KEY, ADMIN_PASSWORD, ADMIN_MEMO_CONTENT 환경변수로 덮어써서 실행하세요.
+# (게임 운영 시에는 이 값들을 코드에 그대로 두지 마세요 — git 저장소에 커밋된 채로 두면
+#  참가자가 해킹 없이 소스만 읽고 정답을 알 수 있습니다.)
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme_before_game")
 ADMIN_MEMO_TITLE = "관리자 메모"
-ADMIN_MEMO_CONTENT = "SBOB{w3lc0me_4dm1n_p4n3l}"
+ADMIN_MEMO_CONTENT = os.environ.get("ADMIN_MEMO_CONTENT", "SBOB{replace_this_before_game}")
+
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 60
+_login_attempts = defaultdict(list)
+
+
+def is_login_locked(username):
+    now = time.time()
+    attempts = [t for t in _login_attempts[username] if now - t < LOGIN_LOCKOUT_SECONDS]
+    _login_attempts[username] = attempts
+    return len(attempts) >= MAX_LOGIN_ATTEMPTS
+
+
+def record_failed_login(username):
+    _login_attempts[username].append(time.time())
+
+
+def clear_login_attempts(username):
+    _login_attempts.pop(username, None)
 
 PAGE_STYLE = """
 <style>
@@ -349,7 +382,7 @@ def index():
             else ""
         )
         body = f"""
-        <h1>환영합니다, {session['username']}님</h1>
+        <h1>환영합니다, {escape(session['username'])}님</h1>
         <div class="links">
             <a href="{url_for('memo_list')}" class="primary">메모 목록</a>
             <a href="{url_for('logout')}">로그아웃</a>
@@ -425,12 +458,21 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
 
+        if is_login_locked(username):
+            body = """
+            <h1>로그인</h1>
+            <p class="msg">로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.</p>
+            <a href="/login">다시 시도</a>
+            """
+            return render_page("로그인", body)
+
         db = get_db()
         user = db.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
         ).fetchone()
 
         if user is None or not check_password_hash(user["password"], password):
+            record_failed_login(username)
             body = """
             <h1>로그인</h1>
             <p class="msg">아이디 또는 비밀번호가 올바르지 않습니다.</p>
@@ -438,6 +480,8 @@ def login():
             """
             return render_page("로그인", body)
 
+        clear_login_attempts(username)
+        session.clear()
         session["username"] = user["username"]
         session["user_id"] = user["id"]
         session["role"] = user["role"]
@@ -674,7 +718,10 @@ def admin_dashboard():
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, port=5001)
+    # 개발 중 디버거가 필요하면 FLASK_DEBUG=1로 실행하세요.
+    # (debug=True는 Werkzeug 인터랙티브 디버거를 열어 RCE 위험이 있어 기본값은 False입니다.)
+    debug_mode = os.environ.get("FLASK_DEBUG") == "1"
+    app.run(debug=debug_mode, port=5001)
 
 
 # 실행 방법:
@@ -689,3 +736,15 @@ if __name__ == "__main__":
 #      가상환경(.venv) 사용을 권장합니다. python/pip 명령이 없다면 python3/pip3를 사용하세요.
 #    - 포트는 5000 대신 5001을 사용합니다. macOS의 AirPlay Receiver(제어센터)가
 #      기본적으로 5000번 포트를 점유해 127.0.0.1:5000 접속 시 403 오류가 날 수 있습니다.
+#
+# 모의해킹 게임 운영 시 보안 체크리스트:
+#    - !!! 필수 !!! SECRET_KEY, ADMIN_PASSWORD, ADMIN_MEMO_CONTENT 환경변수를
+#      게임 시작 전 반드시 실제 값으로 설정하세요.
+#      코드 상단의 기본값(changeme_before_game, SBOB{replace_this_before_game} 등)은
+#      전부 플레이스홀더이며, 이미 공개 저장소에 커밋되어 있어 그대로 쓰면 안 됩니다.
+#      예) SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))") \
+#          ADMIN_PASSWORD="원하는_관리자_비번" \
+#          ADMIN_MEMO_CONTENT="SBOB{실제_플래그}" \
+#          ./.venv/bin/python app.py
+#    - FLASK_DEBUG는 게임 중에는 설정하지 마세요 (기본값 False가 안전합니다).
+#    - 게임 시작 전 기존 memo.db를 삭제하고 새로 시작하면 admin 계정/플래그가 새 값으로 재생성됩니다.
