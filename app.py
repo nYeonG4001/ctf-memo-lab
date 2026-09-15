@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, abort, g, redirect, request, session, url_for
+from flask import Flask, Response, abort, g, redirect, request, session, url_for
 from markupsafe import escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -49,6 +49,10 @@ DECOY_MEMOS = [
 # 진짜 플래그(ADMIN_MEMO_CONTENT)와 형식만 같고 값은 다릅니다.
 FAKE_FLAG_CONTENT = "SBOB{n0t_th3_r34l_fl4g}"
 
+# /submit에서 오답 감점(-10점) 판정에 쓰는 가짜 플래그 전체 목록.
+# 지금까지 심어둔 가짜 플래그를 전부 등록해두세요 (여러 개면 콤마로 추가).
+FAKE_FLAGS = [FAKE_FLAG_CONTENT]
+
 # "administrator", "superadmin" 처럼 관리자스러운 이름을 쓰지만 실제 role은 "user"인 가짜 관리자
 # 계정입니다. 진짜 admin 권한은 없고, 착각을 유도하는 용도입니다. (비밀번호는 자유롭게 변경하세요.)
 DECOY_ADMIN_ACCOUNTS = [
@@ -56,10 +60,15 @@ DECOY_ADMIN_ACCOUNTS = [
     ("superadmin", "adm1n_d3c0y_pw2"),
 ]
 
+# park_intern 계정: /internal/notes 힌트("이름+연도" 규칙)로 유추 가능한 비밀번호를 씁니다.
+# 힌트 문구와 반드시 짝이 맞아야 하므로, 비번을 직접 바꾸려면 internal_notes()의 안내 문구도 같이 수정하세요.
+PARK_INTERN_USERNAME = "park_intern"
+PARK_INTERN_PASSWORD = f"park{datetime.now().year}"
+
 # 평범한 일반 유저 계정입니다. 계정을 탈취해도 진짜/가짜 플래그 없이 순수 미끼용 메모만 들어있습니다.
 DECOY_NORMAL_ACCOUNTS = [
     ("kim_dev", "kim_pw_1234"),
-    ("park_intern", "park_pw_1234"),
+    (PARK_INTERN_USERNAME, PARK_INTERN_PASSWORD),
     ("lee_designer", "lee_pw_1234"),
 ]
 
@@ -336,6 +345,15 @@ PAGE_STYLE = """
         border-color: #2f80ed;
         text-decoration: none;
     }
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: #2f80ed;
+        color: #ffffff;
+        font-size: 11px;
+        margin-left: 6px;
+    }
 </style>
 """
 
@@ -406,6 +424,18 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                submitted_flag TEXT NOT NULL,
+                is_correct INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
@@ -497,6 +527,19 @@ def init_db():
                         "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
                         (user_id, title, content, random_recent_timestamp()),
                     )
+
+                # park_intern 계정에는 진짜 admin 비밀번호로 이어지는 단서를 하나 더 심습니다.
+                # ADMIN_PASSWORD를 그대로 참조하므로, 운영자가 환경변수를 바꾸면 자동으로 최신 값이 반영됩니다.
+                if username == PARK_INTERN_USERNAME:
+                    db.execute(
+                        "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                        (
+                            user_id,
+                            "메모",
+                            f"관리자 계정 비번 기억 안 나서 메모: {ADMIN_PASSWORD}",
+                            random_recent_timestamp(),
+                        ),
+                    )
                 db.commit()
 
 
@@ -533,6 +576,57 @@ def get_own_memo(memo_id):
     return memo
 
 
+def compute_scores(db):
+    users = db.execute("SELECT id, username FROM users ORDER BY id").fetchall()
+
+    first_blood_row = db.execute(
+        "SELECT user_id FROM submissions WHERE is_correct = 1 ORDER BY id ASC LIMIT 1"
+    ).fetchone()
+    first_blood_user_id = first_blood_row["user_id"] if first_blood_row else None
+
+    correct_user_ids = {
+        row["user_id"]
+        for row in db.execute("SELECT DISTINCT user_id FROM submissions WHERE is_correct = 1")
+    }
+
+    # 가짜 플래그 감점은 "같은 가짜 플래그를 몇 번 냈든 최초 1회만" 적용하므로,
+    # 유저별로 실제 FAKE_FLAGS에 해당하는 값만 종류별로 집계합니다.
+    fake_hits = {}
+    for row in db.execute("SELECT user_id, submitted_flag FROM submissions WHERE is_correct = 0"):
+        if row["submitted_flag"] in FAKE_FLAGS:
+            fake_hits.setdefault(row["user_id"], set()).add(row["submitted_flag"])
+
+    scores = []
+    for u in users:
+        score = 0
+        first_blood = False
+        if u["id"] in correct_user_ids:
+            score += 100
+            if u["id"] == first_blood_user_id:
+                score += 20
+                first_blood = True
+        score -= 10 * len(fake_hits.get(u["id"], ()))
+        scores.append({"username": u["username"], "score": score, "first_blood": first_blood})
+
+    scores.sort(key=lambda s: s["score"], reverse=True)
+    return scores
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    return Response("User-agent: *\nDisallow: /internal/notes\n", mimetype="text/plain")
+
+
+@app.route("/internal/notes")
+def internal_notes():
+    # 순수 정적 텍스트만 반환합니다 (파일시스템 접근/경로 파라미터 없음 -> 경로 순회 불가).
+    text = (
+        "임시 인턴 계정 발급됨: park_intern / "
+        "비번은 계정 생성 시 안내한 규칙대로 설정됨 (예: 이름+연도)"
+    )
+    return Response(text, mimetype="text/plain")
+
+
 @app.route("/")
 def index():
     if "username" in session:
@@ -549,6 +643,10 @@ def index():
                 {csrf_field()}
                 <button type="submit">로그아웃</button>
             </form>
+        </div>
+        <div class="links">
+            <a href="{url_for('submit_flag')}">플래그 제출</a>
+            <a href="{url_for('scoreboard')}">점수판</a>
         </div>
         {admin_link}
         """
@@ -892,6 +990,139 @@ def admin_dashboard():
     <ul class="memo-list">{rows}</ul>
     """
     return render_page("관리자", body, wide=True)
+
+
+@app.route("/submit", methods=["GET", "POST"])
+@login_required
+def submit_flag():
+    db = get_db()
+    message = None
+
+    already_correct = db.execute(
+        "SELECT id FROM submissions WHERE user_id = ? AND is_correct = 1",
+        (session["user_id"],),
+    ).fetchone()
+
+    if request.method == "POST":
+        submitted = request.form.get("flag", "").strip()
+
+        if already_correct:
+            message = "이미 맞추셨습니다."
+        elif not submitted:
+            message = "플래그를 입력해주세요."
+        elif submitted == ADMIN_MEMO_CONTENT:
+            is_first_blood = (
+                db.execute("SELECT id FROM submissions WHERE is_correct = 1 LIMIT 1").fetchone()
+                is None
+            )
+            db.execute(
+                "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 1, ?)",
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+            )
+            db.commit()
+            already_correct = True
+            message = (
+                "정답입니다! +100점 (First Blood! +20점 추가)"
+                if is_first_blood
+                else "정답입니다! +100점"
+            )
+        elif submitted in FAKE_FLAGS:
+            dup = db.execute(
+                "SELECT id FROM submissions WHERE user_id = ? AND submitted_flag = ? AND is_correct = 0",
+                (session["user_id"], submitted),
+            ).fetchone()
+            db.execute(
+                "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 0, ?)",
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+            )
+            db.commit()
+            message = (
+                "가짜 플래그입니다. -10점"
+                if dup is None
+                else "가짜 플래그입니다 (이미 제출한 적 있어 추가 감점은 없습니다)."
+            )
+        else:
+            db.execute(
+                "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 0, ?)",
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+            )
+            db.commit()
+            message = "오답입니다."
+
+    history = db.execute(
+        "SELECT submitted_flag, is_correct, created_at FROM submissions WHERE user_id = ? ORDER BY id DESC",
+        (session["user_id"],),
+    ).fetchall()
+
+    if history:
+        history_items = "".join(
+            f"""
+            <li class="memo-item">
+                <span>{escape(h['submitted_flag'])} — {'정답' if h['is_correct'] else '오답'}</span>
+                <span class="memo-date">{h['created_at']}</span>
+            </li>
+            """
+            for h in history
+        )
+        history_html = f'<ul class="memo-list">{history_items}</ul>'
+    else:
+        history_html = '<p class="msg">제출 이력이 없습니다.</p>'
+
+    message_html = f'<p class="msg">{escape(message)}</p>' if message else ""
+
+    already_correct_notice = (
+        '<p class="msg">이미 정답을 맞추셨습니다.</p>' if already_correct and not message else ""
+    )
+
+    body = f"""
+    <div class="toolbar">
+        <h1>플래그 제출</h1>
+        <a href="{url_for('scoreboard')}">점수판</a>
+    </div>
+    {message_html}
+    {already_correct_notice}
+    <form method="post">
+        {csrf_field()}
+        <div class="field">
+            <label for="flag">플래그</label>
+            <input type="text" id="flag" name="flag" placeholder="SBOB{{...}}">
+        </div>
+        <input type="submit" value="제출">
+    </form>
+    <div class="toolbar" style="margin-top: 32px;">
+        <h1>내 제출 이력</h1>
+    </div>
+    {history_html}
+    <a href="{url_for('index')}">홈으로</a>
+    """
+    return render_page("플래그 제출", body, wide=True)
+
+
+@app.route("/scoreboard")
+@login_required
+def scoreboard():
+    db = get_db()
+    scores = compute_scores(db)
+
+    rows = "".join(
+        f"""
+        <li class="memo-item">
+            <span>{escape(s['username'])}{' <span class="badge">First Blood</span>' if s['first_blood'] else ''}</span>
+            <span class="memo-date">{s['score']}점</span>
+        </li>
+        """
+        for s in scores
+    )
+
+    body = f"""
+    <div class="toolbar">
+        <h1>점수판</h1>
+        <a href="{url_for('submit_flag')}">플래그 제출</a>
+    </div>
+    <ul class="memo-list">{rows}</ul>
+    <a href="{url_for('index')}">홈으로</a>
+    """
+    return render_page("점수판", body, wide=True)
 
 
 def warn_if_config_stale():
