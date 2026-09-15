@@ -220,6 +220,9 @@ PAGE_STYLE = """
         display: flex;
         gap: 12px;
     }
+    .links + .links {
+        margin-top: 12px;
+    }
     .links a,
     .links form {
         flex: 1;
