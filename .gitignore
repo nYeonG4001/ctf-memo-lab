@@ -1,0 +1,5 @@
+.venv/
+memo.db
+__pycache__/
+*.pyc
+.omc/
