@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import secrets
 import sqlite3
@@ -29,6 +30,15 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme_before_game")
 ADMIN_MEMO_TITLE = "관리자 메모"
 ADMIN_MEMO_CONTENT = os.environ.get("ADMIN_MEMO_CONTENT", "SBOB{replace_this_before_game}")
+
+# admin 계정 최초 생성 시 플래그 메모와 함께 만들어지는 미끼 메모들.
+# 플래그 메모가 목록에서 튀지 않도록 섞는 용도이니, 평범한 업무 메모 톤으로 자유롭게 수정하세요.
+DECOY_MEMOS = [
+    ("회의 메모", "다음 주 배포 일정 논의 필요"),
+    ("임시 저장", "작성 중..."),
+    ("서버 점검 기록", "9/15 새벽 점검 완료, 특이사항 없음"),
+    ("장보기", "우유, 계란, 식빵"),
+]
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,20}$")
 
@@ -385,15 +395,21 @@ def init_db():
             admin_id = db.execute(
                 "SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,)
             ).fetchone()["id"]
-            db.execute(
-                "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
-                (
-                    admin_id,
-                    ADMIN_MEMO_TITLE,
-                    ADMIN_MEMO_CONTENT,
-                    datetime.now().strftime("%Y-%m-%d %H:%M"),
-                ),
-            )
+
+            # 플래그 메모가 목록 맨 위/아래에 고정되지 않도록, 미끼 메모들과 섞어서 저장합니다.
+            seed_memos = [(ADMIN_MEMO_TITLE, ADMIN_MEMO_CONTENT)] + list(DECOY_MEMOS)
+            random.shuffle(seed_memos)
+
+            for title, content in seed_memos:
+                db.execute(
+                    "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        admin_id,
+                        title,
+                        content,
+                        datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    ),
+                )
             db.commit()
 
 
