@@ -1,8 +1,8 @@
 import os
+import re
 import secrets
 import sqlite3
 import time
-from collections import defaultdict
 from datetime import datetime
 from functools import wraps
 
@@ -30,24 +30,66 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme_before_game")
 ADMIN_MEMO_TITLE = "관리자 메모"
 ADMIN_MEMO_CONTENT = os.environ.get("ADMIN_MEMO_CONTENT", "SBOB{replace_this_before_game}")
 
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,20}$")
+
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_SECONDS = 60
-_login_attempts = defaultdict(list)
+_login_attempts = {}
+
+
+def _login_attempt_key(username):
+    # IP + 아이디로 묶어서, 공격자가 아이디만 알아도 진짜 사용자를 잠그지 못하게 합니다.
+    return (request.remote_addr, username)
 
 
 def is_login_locked(username):
+    key = _login_attempt_key(username)
     now = time.time()
-    attempts = [t for t in _login_attempts[username] if now - t < LOGIN_LOCKOUT_SECONDS]
-    _login_attempts[username] = attempts
+    attempts = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_LOCKOUT_SECONDS]
+    if attempts:
+        _login_attempts[key] = attempts
+    else:
+        _login_attempts.pop(key, None)
     return len(attempts) >= MAX_LOGIN_ATTEMPTS
 
 
 def record_failed_login(username):
-    _login_attempts[username].append(time.time())
+    key = _login_attempt_key(username)
+    _login_attempts.setdefault(key, []).append(time.time())
 
 
 def clear_login_attempts(username):
-    _login_attempts.pop(username, None)
+    _login_attempts.pop(_login_attempt_key(username), None)
+
+
+def get_csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(16)
+        session["csrf_token"] = token
+    return token
+
+
+def csrf_field():
+    return f'<input type="hidden" name="csrf_token" value="{get_csrf_token()}">'
+
+
+@app.before_request
+def check_csrf():
+    if request.method == "POST":
+        token = session.get("csrf_token")
+        submitted = request.form.get("csrf_token")
+        if not token or not submitted or not secrets.compare_digest(token, submitted):
+            abort(400)
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
 
 PAGE_STYLE = """
 <style>
@@ -128,22 +170,37 @@ PAGE_STYLE = """
         display: flex;
         gap: 12px;
     }
-    .links a {
+    .links a,
+    .links form {
         flex: 1;
+    }
+    .links a,
+    .links button {
+        display: block;
+        width: 100%;
         text-align: center;
         padding: 10px;
         border-radius: 6px;
         border: 1px solid #e0e0e0;
+        background: #ffffff;
+        color: #37352f;
+        font-size: 14px;
+        font-family: inherit;
+        cursor: pointer;
+        text-decoration: none;
     }
-    .links a.primary {
+    .links a.primary,
+    .links button.primary {
         background: #2f80ed;
         border-color: #2f80ed;
         color: #ffffff;
     }
-    .links a.primary:hover {
+    .links a.primary:hover,
+    .links button.primary:hover {
         background: #2569c4;
     }
-    .links a:not(.primary):hover {
+    .links a:not(.primary):hover,
+    .links button:not(.primary):hover {
         border-color: #2f80ed;
         text-decoration: none;
     }
@@ -385,7 +442,10 @@ def index():
         <h1>환영합니다, {escape(session['username'])}님</h1>
         <div class="links">
             <a href="{url_for('memo_list')}" class="primary">메모 목록</a>
-            <a href="{url_for('logout')}">로그아웃</a>
+            <form method="post" action="{url_for('logout')}">
+                {csrf_field()}
+                <button type="submit">로그아웃</button>
+            </form>
         </div>
         {admin_link}
         """
@@ -415,9 +475,17 @@ def signup():
             """
             return render_page("회원가입", body)
 
+        if not USERNAME_PATTERN.fullmatch(username):
+            body = """
+            <h1>회원가입</h1>
+            <p class="msg">아이디는 영문/숫자/밑줄(_) 3~20자여야 합니다.</p>
+            <a href="/signup">다시 시도</a>
+            """
+            return render_page("회원가입", body)
+
         db = get_db()
         existing = db.execute(
-            "SELECT id FROM users WHERE username = ?", (username,)
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
         ).fetchone()
         if existing is not None:
             body = """
@@ -435,9 +503,10 @@ def signup():
         db.commit()
         return redirect(url_for("login"))
 
-    body = """
+    body = f"""
     <h1>회원가입</h1>
     <form method="post">
+        {csrf_field()}
         <div class="field">
             <label for="username">아이디</label>
             <input type="text" id="username" name="username">
@@ -468,7 +537,7 @@ def login():
 
         db = get_db()
         user = db.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,)
         ).fetchone()
 
         if user is None or not check_password_hash(user["password"], password):
@@ -487,9 +556,10 @@ def login():
         session["role"] = user["role"]
         return redirect(url_for("index"))
 
-    body = """
+    body = f"""
     <h1>로그인</h1>
     <form method="post">
+        {csrf_field()}
         <div class="field">
             <label for="username">아이디</label>
             <input type="text" id="username" name="username">
@@ -504,7 +574,7 @@ def login():
     return render_page("로그인", body)
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.pop("username", None)
     session.pop("user_id", None)
@@ -558,6 +628,7 @@ def memo_new():
             <h1>새 메모</h1>
             <p class="msg">제목과 내용을 모두 입력해주세요.</p>
             <form method="post">
+                {csrf_field()}
                 <div class="field">
                     <label for="title">제목</label>
                     <input type="text" id="title" name="title" value="{escape(title)}">
@@ -584,9 +655,10 @@ def memo_new():
         db.commit()
         return redirect(url_for("memo_list"))
 
-    body = """
+    body = f"""
     <h1>새 메모</h1>
     <form method="post">
+        {csrf_field()}
         <div class="field">
             <label for="title">제목</label>
             <input type="text" id="title" name="title">
@@ -615,6 +687,7 @@ def memo_detail(memo_id):
     <div class="btn-row">
         <a href="{url_for('memo_edit', memo_id=memo['id'])}">수정</a>
         <form method="post" action="{url_for('memo_delete', memo_id=memo['id'])}">
+            {csrf_field()}
             <button type="submit">삭제</button>
         </form>
     </div>
@@ -637,6 +710,7 @@ def memo_edit(memo_id):
             <h1>메모 수정</h1>
             <p class="msg">제목과 내용을 모두 입력해주세요.</p>
             <form method="post">
+                {csrf_field()}
                 <div class="field">
                     <label for="title">제목</label>
                     <input type="text" id="title" name="title" value="{escape(title)}">
@@ -661,6 +735,7 @@ def memo_edit(memo_id):
     body = f"""
     <h1>메모 수정</h1>
     <form method="post">
+        {csrf_field()}
         <div class="field">
             <label for="title">제목</label>
             <input type="text" id="title" name="title" value="{escape(memo['title'])}">
@@ -716,12 +791,37 @@ def admin_dashboard():
     return render_page("관리자", body, wide=True)
 
 
+def warn_if_config_stale():
+    if ADMIN_PASSWORD == "changeme_before_game":
+        print(f"[경고] ADMIN_PASSWORD가 기본 플레이스홀더({ADMIN_PASSWORD!r})입니다. "
+              "게임 전 환경변수로 반드시 바꿔주세요.")
+    if ADMIN_MEMO_CONTENT == "SBOB{replace_this_before_game}":
+        print(f"[경고] ADMIN_MEMO_CONTENT(플래그)가 기본 플레이스홀더({ADMIN_MEMO_CONTENT!r})입니다. "
+              "게임 전 환경변수로 반드시 바꿔주세요.")
+
+    if not os.path.exists(DATABASE):
+        return
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT password FROM users WHERE username = ? COLLATE NOCASE", (ADMIN_USERNAME,)
+    ).fetchone()
+    conn.close()
+    if row is not None and not check_password_hash(row["password"], ADMIN_PASSWORD):
+        print(f"[경고] 기존 {DATABASE}의 '{ADMIN_USERNAME}' 계정 비밀번호가 지금 설정한 "
+              "ADMIN_PASSWORD와 다릅니다 (admin 계정은 최초 생성 시에만 비밀번호가 저장됩니다). "
+              f"새 값을 적용하려면 {DATABASE} 파일을 삭제한 뒤 다시 실행하세요.")
+
+
 if __name__ == "__main__":
     init_db()
+    warn_if_config_stale()
     # 개발 중 디버거가 필요하면 FLASK_DEBUG=1로 실행하세요.
     # (debug=True는 Werkzeug 인터랙티브 디버거를 열어 RCE 위험이 있어 기본값은 False입니다.)
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"
-    app.run(debug=debug_mode, port=5001)
+    # 게임 서버로 열 때는 HOST=0.0.0.0으로 실행하세요 (기본값 127.0.0.1은 외부 접속 불가).
+    host = os.environ.get("HOST", "127.0.0.1")
+    app.run(debug=debug_mode, host=host, port=5001)
 
 
 # 실행 방법:
@@ -748,3 +848,7 @@ if __name__ == "__main__":
 #          ./.venv/bin/python app.py
 #    - FLASK_DEBUG는 게임 중에는 설정하지 마세요 (기본값 False가 안전합니다).
 #    - 게임 시작 전 기존 memo.db를 삭제하고 새로 시작하면 admin 계정/플래그가 새 값으로 재생성됩니다.
+#      (admin 계정은 최초 1회만 생성되므로, memo.db를 안 지우면 환경변수를 바꿔도 무시됩니다.
+#       실행 시 기존 비밀번호와 다르면 경고 메시지가 출력됩니다.)
+#    - 기본값은 HOST=127.0.0.1(로컬에서만 접속 가능)입니다. 참가자들이 접속할 수 있는
+#      게임 서버로 열려면 HOST=0.0.0.0 으로 실행하세요.
