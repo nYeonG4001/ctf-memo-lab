@@ -157,10 +157,38 @@ PAGE_STYLE = """
     * { box-sizing: border-box; }
     body {
         margin: 0;
-        padding: 60px 16px;
         background: #f7f7f5;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: #37352f;
+    }
+    .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 24px;
+        background: #ffffff;
+        border-bottom: 1px solid #ededec;
+    }
+    .topbar-brand {
+        font-weight: 600;
+        font-size: 14px;
+        color: #37352f;
+        text-decoration: none;
+    }
+    .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        font-size: 14px;
+    }
+    .topbar-right a {
+        font-size: 14px;
+    }
+    .topbar-user {
+        color: #6b6b6b;
+    }
+    .page {
+        padding: 60px 16px;
         display: flex;
         justify-content: center;
     }
@@ -227,22 +255,23 @@ PAGE_STYLE = """
         color: #6b6b6b;
         margin: 0 0 16px;
     }
+    .form-footer {
+        font-size: 14px;
+        color: #6b6b6b;
+        margin: 20px 0 0;
+    }
     .links {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 12px;
     }
     .links + .links {
         margin-top: 12px;
     }
     .links a,
-    .links form {
-        flex: 1 1 auto;
-        min-width: max-content;
-    }
-    .links a,
     .links button {
         display: block;
+        width: 100%;
         text-align: center;
         padding: 10px;
         border-radius: 6px;
@@ -376,6 +405,10 @@ PAGE_STYLE = """
 
 def render_page(title, body, wide=False):
     card_class = "card wide" if wide else "card"
+    if "username" in session:
+        topbar_right = f'<span class="topbar-user">{escape(session["username"])}</span>'
+    else:
+        topbar_right = f'<a href="{url_for("login")}">로그인</a>'
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -384,8 +417,14 @@ def render_page(title, body, wide=False):
 {PAGE_STYLE}
 </head>
 <body>
+<div class="topbar">
+    <a href="{url_for('index')}" class="topbar-brand">메모</a>
+    <div class="topbar-right">{topbar_right}</div>
+</div>
+<div class="page">
 <div class="{card_class}">
 {body}
+</div>
 </div>
 </body>
 </html>"""
@@ -687,39 +726,54 @@ def index():
     return render_page("메모 서비스", body)
 
 
+def render_signup_form(username="", error=None):
+    message_html = f'<p class="msg">{escape(error)}</p>' if error else ""
+    body = f"""
+    <h1>회원가입</h1>
+    {message_html}
+    <form method="post">
+        {csrf_field()}
+        <div class="field">
+            <label for="username">아이디</label>
+            <input type="text" id="username" name="username" value="{escape(username)}">
+        </div>
+        <div class="field">
+            <label for="password">비밀번호</label>
+            <input type="password" id="password" name="password">
+        </div>
+        <div class="field">
+            <label for="password_confirm">비밀번호 확인</label>
+            <input type="password" id="password_confirm" name="password_confirm">
+        </div>
+        <input type="submit" value="가입하기">
+    </form>
+    <p class="form-footer">이미 계정이 있나요? <a href="{url_for('login')}">로그인</a></p>
+    """
+    return render_page("회원가입", body)
+
+
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
+        password_confirm = request.form.get("password_confirm", "")
 
-        if not username or not password:
-            body = """
-            <h1>회원가입</h1>
-            <p class="msg">아이디와 비밀번호를 모두 입력해주세요.</p>
-            <a href="/signup">다시 시도</a>
-            """
-            return render_page("회원가입", body)
+        if not username or not password or not password_confirm:
+            return render_signup_form(username, "아이디와 비밀번호를 모두 입력해주세요.")
 
         if not USERNAME_PATTERN.fullmatch(username):
-            body = """
-            <h1>회원가입</h1>
-            <p class="msg">아이디는 영문/숫자/밑줄(_) 3~20자여야 합니다.</p>
-            <a href="/signup">다시 시도</a>
-            """
-            return render_page("회원가입", body)
+            return render_signup_form(username, "아이디는 영문/숫자/밑줄(_) 3~20자여야 합니다.")
+
+        if password != password_confirm:
+            return render_signup_form(username, "비밀번호가 일치하지 않습니다.")
 
         db = get_db()
         existing = db.execute(
             "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
         ).fetchone()
         if existing is not None:
-            body = """
-            <h1>회원가입</h1>
-            <p class="msg">이미 존재하는 아이디입니다.</p>
-            <a href="/signup">다시 시도</a>
-            """
-            return render_page("회원가입", body)
+            return render_signup_form(username, "이미 존재하는 아이디입니다.")
 
         hashed_password = generate_password_hash(password)
         db.execute(
@@ -729,22 +783,29 @@ def signup():
         db.commit()
         return redirect(url_for("login"))
 
+    return render_signup_form()
+
+
+def render_login_form(username="", error=None):
+    message_html = f'<p class="msg">{escape(error)}</p>' if error else ""
     body = f"""
-    <h1>회원가입</h1>
+    <h1>로그인</h1>
+    {message_html}
     <form method="post">
         {csrf_field()}
         <div class="field">
             <label for="username">아이디</label>
-            <input type="text" id="username" name="username">
+            <input type="text" id="username" name="username" value="{escape(username)}">
         </div>
         <div class="field">
             <label for="password">비밀번호</label>
             <input type="password" id="password" name="password">
         </div>
-        <input type="submit" value="가입하기">
+        <input type="submit" value="로그인">
     </form>
+    <p class="form-footer">계정이 없나요? <a href="{url_for('signup')}">회원가입</a></p>
     """
-    return render_page("회원가입", body)
+    return render_page("로그인", body)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -754,12 +815,7 @@ def login():
         password = request.form["password"]
 
         if is_login_locked(username):
-            body = """
-            <h1>로그인</h1>
-            <p class="msg">로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.</p>
-            <a href="/login">다시 시도</a>
-            """
-            return render_page("로그인", body)
+            return render_login_form(username, "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.")
 
         db = get_db()
         user = db.execute(
@@ -768,12 +824,7 @@ def login():
 
         if user is None or not check_password_hash(user["password"], password):
             record_failed_login(username)
-            body = """
-            <h1>로그인</h1>
-            <p class="msg">아이디 또는 비밀번호가 올바르지 않습니다.</p>
-            <a href="/login">다시 시도</a>
-            """
-            return render_page("로그인", body)
+            return render_login_form(username, "아이디 또는 비밀번호가 올바르지 않습니다.")
 
         clear_login_attempts(username)
         session.clear()
@@ -782,22 +833,7 @@ def login():
         session["role"] = user["role"]
         return redirect(url_for("index"))
 
-    body = f"""
-    <h1>로그인</h1>
-    <form method="post">
-        {csrf_field()}
-        <div class="field">
-            <label for="username">아이디</label>
-            <input type="text" id="username" name="username">
-        </div>
-        <div class="field">
-            <label for="password">비밀번호</label>
-            <input type="password" id="password" name="password">
-        </div>
-        <input type="submit" value="로그인">
-    </form>
-    """
-    return render_page("로그인", body)
+    return render_login_form()
 
 
 @app.route("/logout", methods=["POST"])
