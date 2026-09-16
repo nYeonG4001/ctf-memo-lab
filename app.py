@@ -399,6 +399,21 @@ PAGE_STYLE = """
         font-size: 11px;
         margin-left: 6px;
     }
+    .rank-number {
+        display: inline-block;
+        min-width: 20px;
+        margin-right: 8px;
+        color: #9b9a97;
+    }
+    .memo-item.rank-top {
+        font-weight: 700;
+    }
+    .memo-item.rank-top .rank-number {
+        color: #37352f;
+    }
+    .rank-number.rank-first {
+        color: #2f80ed;
+    }
 </style>
 """
 
@@ -414,6 +429,7 @@ def render_page(title, body, wide=False):
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚩</text></svg>">
 {PAGE_STYLE}
 </head>
 <body>
@@ -735,7 +751,7 @@ def render_signup_form(username="", error=None):
         {csrf_field()}
         <div class="field">
             <label for="username">아이디</label>
-            <input type="text" id="username" name="username" value="{escape(username)}">
+            <input type="text" id="username" name="username" value="{escape(username)}" autofocus>
         </div>
         <div class="field">
             <label for="password">비밀번호</label>
@@ -795,7 +811,7 @@ def render_login_form(username="", error=None):
         {csrf_field()}
         <div class="field">
             <label for="username">아이디</label>
-            <input type="text" id="username" name="username" value="{escape(username)}">
+            <input type="text" id="username" name="username" value="{escape(username)}" autofocus>
         </div>
         <div class="field">
             <label for="password">비밀번호</label>
@@ -865,7 +881,12 @@ def memo_list():
         )
         list_html = f'<ul class="memo-list">{items}</ul>'
     else:
-        list_html = '<p class="msg">작성한 메모가 없습니다.</p>'
+        list_html = f"""
+        <p class="msg">아직 메모가 없어요. 첫 메모를 남겨보세요!</p>
+        <div class="links">
+            <a href="{url_for('memo_new')}" class="primary">새 메모 작성</a>
+        </div>
+        """
 
     body = f"""
     <div class="toolbar">
@@ -1146,7 +1167,7 @@ def submit_flag():
         {csrf_field()}
         <div class="field">
             <label for="flag">플래그</label>
-            <input type="text" id="flag" name="flag" placeholder="SBOB{{...}}">
+            <input type="text" id="flag" name="flag" placeholder="SBOB{{...}}" style="font-family: monospace;">
         </div>
         <input type="submit" value="제출">
     </form>
@@ -1167,12 +1188,15 @@ def scoreboard():
 
     rows = "".join(
         f"""
-        <li class="memo-item">
-            <span>{escape(s['username'])}{' <span class="badge">First Blood</span>' if s['first_blood'] else ''}</span>
+        <li class="memo-item{' rank-top' if rank <= 3 else ''}">
+            <span>
+                <span class="rank-number{' rank-first' if rank == 1 else ''}">{rank}</span>
+                {escape(s['username'])}{' <span class="badge">First Blood</span>' if s['first_blood'] else ''}
+            </span>
             <span class="memo-date">{s['score']}점</span>
         </li>
         """
-        for s in scores
+        for rank, s in enumerate(scores, start=1)
     )
 
     body = f"""
