@@ -15,7 +15,9 @@ jobs:
           host: ${{ secrets.GCP_HOST }}
           username: ${{ secrets.GCP_USER }}
           key: ${{ secrets.GCP_SSH_KEY }}
+          script_stop: true
           script: |
+            set -e
             cd ~/whiteTest
             git pull
             docker compose up -d --build
