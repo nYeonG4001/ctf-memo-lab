@@ -1240,7 +1240,7 @@ if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"
     # 게임 서버로 열 때는 HOST=0.0.0.0으로 실행하세요 (기본값 127.0.0.1은 외부 접속 불가).
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "5001"))
+    port = int(os.environ.get("PORT", "8000"))
     app.run(debug=debug_mode, host=host, port=port)
 
 
