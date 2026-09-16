@@ -323,9 +323,14 @@ PAGE_STYLE = """
         background: none;
         border: none;
         padding: 0;
+        margin: 0;
         color: #2f80ed;
         font-size: 14px;
         font-family: inherit;
+        line-height: inherit;
+        vertical-align: baseline;
+        appearance: none;
+        -webkit-appearance: none;
         cursor: pointer;
         text-decoration: none;
     }
@@ -1150,9 +1155,9 @@ def admin_dashboard():
     body = f"""
     <div class="toolbar">
         <h1>회원 목록</h1>
-        <a href="{url_for('index')}">홈으로</a>
     </div>
     <ul class="memo-list">{rows}</ul>
+    <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
     return render_page("관리자", body, wide=True)
 
@@ -1230,12 +1235,11 @@ def submit_flag():
     <form method="post">
         {csrf_field()}
         <div class="field">
-            <label for="flag">플래그</label>
-            <input type="text" id="flag" name="flag" placeholder="SBOB{{...}}" style="font-family: monospace;">
+            <input type="text" name="flag" placeholder="SBOB{{...}}" style="font-family: monospace;">
         </div>
         <input type="submit" value="제출">
     </form>
-    <a href="{url_for('index')}">홈으로</a>
+    <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
     return render_page("플래그 제출", body, wide=True)
 
