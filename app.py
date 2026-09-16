@@ -299,6 +299,32 @@ PAGE_STYLE = """
         border-color: #2f80ed;
         text-decoration: none;
     }
+    .links a.hero {
+        padding: 14px;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .links a.admin-link {
+        border-style: dashed;
+        color: #6b6b6b;
+    }
+    .links a.admin-link:hover {
+        border-color: #37352f;
+        color: #37352f;
+    }
+    .link-button {
+        background: none;
+        border: none;
+        padding: 0;
+        color: #2f80ed;
+        font-size: 13px;
+        font-family: inherit;
+        cursor: pointer;
+        text-decoration: none;
+    }
+    .link-button:hover {
+        text-decoration: underline;
+    }
     .card.wide {
         max-width: 640px;
     }
@@ -710,25 +736,31 @@ def internal_notes():
 @app.route("/")
 def index():
     if "username" in session:
-        admin_link = (
-            f'<a href="{url_for("admin_dashboard")}">관리자</a>'
+        admin_block = (
+            f"""
+        <div class="links">
+            <a href="{url_for('admin_dashboard')}" class="admin-link">관리자 페이지</a>
+        </div>
+        """
             if session.get("role") == "admin"
             else ""
         )
         body = f"""
-        <h1>환영합니다, {escape(session['username'])}님</h1>
-        <div class="links">
-            <a href="{url_for('memo_list')}" class="primary">메모 목록</a>
+        <div class="toolbar">
+            <h1>환영합니다, {escape(session['username'])}님</h1>
             <form method="post" action="{url_for('logout')}">
                 {csrf_field()}
-                <button type="submit">로그아웃</button>
+                <button type="submit" class="link-button">로그아웃</button>
             </form>
+        </div>
+        <div class="links">
+            <a href="{url_for('memo_list')}" class="primary hero">메모 목록</a>
         </div>
         <div class="links">
             <a href="{url_for('submit_flag')}">플래그 제출</a>
             <a href="{url_for('scoreboard')}">점수판</a>
-            {admin_link}
         </div>
+        {admin_block}
         """
         return render_page("메모 서비스", body)
 
