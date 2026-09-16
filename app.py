@@ -9,6 +9,7 @@ from functools import wraps
 
 from flask import Flask, Response, abort, g, jsonify, redirect, request, session, url_for
 from markupsafe import escape
+from werkzeug.exceptions import NotFound
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -106,6 +107,14 @@ _api_note_detail_requests = {}
 MAX_TITLE_LENGTH = 200
 MAX_BODY_LENGTH = 5000
 
+# "재미 요소" 함정: GET /api/notes/<id>로 남의 메모 id를 무작위로 훑는 행동(짧은 시간 안에 서로
+# 다른 404 id를 여러 번 시도)을 감지해 자동 감점하기 위한 카운터입니다. 위의 429 속도 제한
+# (_api_note_detail_requests)과는 완전히 별개의 자료구조로 관리합니다 — 섞이면 안 됩니다.
+API_ENUM_TRAP_MARKER = "__api_enum_trap__"
+API_ENUM_TRAP_WINDOW_SECONDS = 60
+API_ENUM_TRAP_DISTINCT_ID_LIMIT = 8
+_api_note_404_hits = {}
+
 
 def _login_attempt_key(username):
     # IP + 아이디로 묶어서, 공격자가 아이디만 알아도 진짜 사용자를 잠그지 못하게 합니다.
@@ -142,6 +151,37 @@ def is_api_note_detail_rate_limited(user_id):
     attempts.append(now)
     _api_note_detail_requests[user_id] = attempts
     return len(attempts) > API_NOTE_DETAIL_RATE_LIMIT
+
+
+def check_api_enum_trap(user_id, memo_id):
+    # GET /api/notes/<id>가 404(본인 것 아님/존재 안 함)로 끝난 요청만 여기로 들어옵니다.
+    # 60초 안에 서로 다른 id를 8개 넘게 시도하면, 최초 1회에 한해 submissions에 감점 기록을 남깁니다.
+    # API 응답 자체(404)는 이 함수와 무관하게 항상 평소와 동일하게 나갑니다.
+    db = get_db()
+    already_penalized = db.execute(
+        "SELECT id FROM submissions WHERE user_id = ? AND submitted_flag = ?",
+        (user_id, API_ENUM_TRAP_MARKER),
+    ).fetchone()
+    if already_penalized is not None:
+        return
+
+    now = time.time()
+    hits = {
+        mid: ts
+        for mid, ts in _api_note_404_hits.get(user_id, {}).items()
+        if now - ts < API_ENUM_TRAP_WINDOW_SECONDS
+    }
+    hits[memo_id] = now
+    _api_note_404_hits[user_id] = hits
+
+    if len(hits) <= API_ENUM_TRAP_DISTINCT_ID_LIMIT:
+        return
+
+    db.execute(
+        "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 0, ?)",
+        (user_id, API_ENUM_TRAP_MARKER, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    db.commit()
 
 
 def get_csrf_token():
@@ -225,9 +265,19 @@ PAGE_STYLE = """
         color: #6b6b6b;
     }
     .page {
-        padding: 60px 16px;
+        padding: 60px 16px 180px;
         display: flex;
         justify-content: center;
+    }
+    .bottom-mascot {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        z-index: 10;
+        width: 151px;
+        height: auto;
+        pointer-events: none;
+        transform: translateX(-50%);
     }
     .card {
         background: #ffffff;
@@ -516,6 +566,9 @@ PAGE_STYLE = """
         font-size: 11px;
         margin-left: 6px;
     }
+    .badge.badge-warning {
+        background: #c0392b;
+    }
     .rank-number {
         display: inline-block;
         min-width: 20px;
@@ -554,6 +607,7 @@ def render_page(title, body, wide=False):
 {PAGE_STYLE}
 </head>
 <body>
+<img class="bottom-mascot" src="{url_for('static', filename='clawd-headphones-groove.gif')}" alt="">
 {topbar_html}<div class="page">
 <div class="{card_class}">
 {body}
@@ -820,6 +874,16 @@ def compute_scores(db):
         if row["submitted_flag"] in FAKE_FLAGS:
             fake_hits.setdefault(row["user_id"], set()).add(row["submitted_flag"])
 
+    # API 남용 함정(check_api_enum_trap)에 걸린 유저 = -20점, 최초 1회만 (insert 시점에 이미
+    # 1인 1행으로 제한되지만, 혹시를 대비해 여기서도 유무만 boolean으로 판단합니다).
+    scanned_user_ids = {
+        row["user_id"]
+        for row in db.execute(
+            "SELECT DISTINCT user_id FROM submissions WHERE is_correct = 0 AND submitted_flag = ?",
+            (API_ENUM_TRAP_MARKER,),
+        )
+    }
+
     scores = []
     for u in users:
         score = 0
@@ -830,7 +894,17 @@ def compute_scores(db):
                 score += 20
                 first_blood = True
         score -= 10 * len(fake_hits.get(u["id"], ()))
-        scores.append({"username": u["username"], "score": score, "first_blood": first_blood})
+        scanned = u["id"] in scanned_user_ids
+        if scanned:
+            score -= 20
+        scores.append(
+            {
+                "username": u["username"],
+                "score": score,
+                "first_blood": first_blood,
+                "scanned": scanned,
+            }
+        )
 
     scores.sort(key=lambda s: s["score"], reverse=True)
     return scores
@@ -1068,7 +1142,12 @@ def api_note_create():
 def api_note_detail(memo_id):
     if is_api_note_detail_rate_limited(session["user_id"]):
         return jsonify(error="too many requests"), 429
-    return jsonify(memo_to_note(get_own_memo(memo_id)))
+    try:
+        memo = get_own_memo(memo_id)
+    except NotFound:
+        check_api_enum_trap(session["user_id"], memo_id)
+        raise
+    return jsonify(memo_to_note(memo))
 
 
 @app.route("/memos")
@@ -1392,7 +1471,7 @@ def scoreboard():
         <li class="memo-item{' rank-top' if rank <= 3 else ''}">
             <span>
                 <span class="rank-number{' rank-first' if rank == 1 else ''}">{rank}</span>
-                {escape(s['username'])}{' <span class="badge">First Blood</span>' if s['first_blood'] else ''}
+                {escape(s['username'])}{' <span class="badge">First Blood</span>' if s['first_blood'] else ''}{' <span class="badge badge-warning">스캔 감지</span>' if s['scanned'] else ''}
             </span>
             <span class="memo-date">{s['score']}점</span>
         </li>
