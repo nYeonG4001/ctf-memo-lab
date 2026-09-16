@@ -420,10 +420,14 @@ PAGE_STYLE = """
 
 def render_page(title, body, wide=False):
     card_class = "card wide" if wide else "card"
+    topbar_html = ""
     if "username" in session:
         topbar_right = f'<span class="topbar-user">{escape(session["username"])}</span>'
-    else:
-        topbar_right = f'<a href="{url_for("login")}">로그인</a>'
+        topbar_html = f"""<div class="topbar">
+    <a href="{url_for('index')}" class="topbar-brand">메모</a>
+    <div class="topbar-right">{topbar_right}</div>
+</div>
+"""
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -433,11 +437,7 @@ def render_page(title, body, wide=False):
 {PAGE_STYLE}
 </head>
 <body>
-<div class="topbar">
-    <a href="{url_for('index')}" class="topbar-brand">메모</a>
-    <div class="topbar-right">{topbar_right}</div>
-</div>
-<div class="page">
+{topbar_html}<div class="page">
 <div class="{card_class}">
 {body}
 </div>
