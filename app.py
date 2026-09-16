@@ -1214,25 +1214,6 @@ def submit_flag():
             db.commit()
             message = "오답입니다."
 
-    history = db.execute(
-        "SELECT submitted_flag, is_correct, created_at FROM submissions WHERE user_id = ? ORDER BY id DESC",
-        (session["user_id"],),
-    ).fetchall()
-
-    if history:
-        history_items = "".join(
-            f"""
-            <li class="memo-item">
-                <span>{escape(h['submitted_flag'])} — {'정답' if h['is_correct'] else '오답'}</span>
-                <span class="memo-date">{h['created_at']}</span>
-            </li>
-            """
-            for h in history
-        )
-        history_html = f'<ul class="memo-list">{history_items}</ul>'
-    else:
-        history_html = '<p class="msg">제출 이력이 없습니다.</p>'
-
     message_html = f'<p class="msg">{escape(message)}</p>' if message else ""
 
     already_correct_notice = (
@@ -1254,10 +1235,6 @@ def submit_flag():
         </div>
         <input type="submit" value="제출">
     </form>
-    <div class="toolbar" style="margin-top: 32px;">
-        <h1>내 제출 이력</h1>
-    </div>
-    {history_html}
     <a href="{url_for('index')}">홈으로</a>
     """
     return render_page("플래그 제출", body, wide=True)
