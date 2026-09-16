@@ -260,6 +260,10 @@ PAGE_STYLE = """
         color: #6b6b6b;
         margin: 20px 0 0;
     }
+    .back-link {
+        display: block;
+        margin-top: 24px;
+    }
     .links {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -390,7 +394,10 @@ PAGE_STYLE = """
         gap: 12px;
     }
     .memo-card {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        aspect-ratio: 4 / 3;
         background: #ffffff;
         border: 1px solid #ededec;
         border-radius: 8px;
@@ -421,6 +428,7 @@ PAGE_STYLE = """
         line-height: 1.6;
         white-space: pre-wrap;
         margin: 16px 0 24px;
+        min-height: 120px;
     }
     .btn-row {
         display: flex;
@@ -961,7 +969,7 @@ def memo_list():
         <a href="{url_for('memo_new')}">새 메모</a>
     </div>
     {list_html}
-    <a href="{url_for('index')}">홈으로</a>
+    <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
     return render_page("내 메모", body, wide=True)
 
@@ -989,6 +997,7 @@ def memo_new():
                 </div>
                 <input type="submit" value="저장">
             </form>
+            <a href="{url_for('memo_list')}" class="back-link">목록으로</a>
             """
             return render_page("새 메모", body, wide=True)
 
@@ -1019,6 +1028,7 @@ def memo_new():
         </div>
         <input type="submit" value="저장">
     </form>
+    <a href="{url_for('memo_list')}" class="back-link">목록으로</a>
     """
     return render_page("새 메모", body, wide=True)
 
