@@ -324,7 +324,7 @@ PAGE_STYLE = """
         border: none;
         padding: 0;
         color: #2f80ed;
-        font-size: 13px;
+        font-size: 14px;
         font-family: inherit;
         cursor: pointer;
         text-decoration: none;
