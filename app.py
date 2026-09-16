@@ -361,6 +361,12 @@ PAGE_STYLE = """
     .toolbar h1 {
         margin: 0;
     }
+    .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-shrink: 0;
+    }
     .memo-list {
         list-style: none;
         margin: 0;
@@ -1041,17 +1047,17 @@ def memo_detail(memo_id):
     body = f"""
     <div class="toolbar">
         <h1>{escape(memo['title'])}</h1>
+        <div class="toolbar-actions">
+            <a href="{url_for('memo_edit', memo_id=memo['id'])}">수정</a>
+            <form method="post" action="{url_for('memo_delete', memo_id=memo['id'])}">
+                {csrf_field()}
+                <button type="submit" class="link-button">삭제</button>
+            </form>
+        </div>
     </div>
     <p class="memo-date">{memo['created_at']}</p>
     <div class="memo-content">{escape(memo['content'])}</div>
-    <div class="btn-row">
-        <a href="{url_for('memo_edit', memo_id=memo['id'])}">수정</a>
-        <form method="post" action="{url_for('memo_delete', memo_id=memo['id'])}">
-            {csrf_field()}
-            <button type="submit">삭제</button>
-        </form>
-    </div>
-    <a href="{url_for('memo_list')}">목록으로</a>
+    <a href="{url_for('memo_list')}" class="back-link">목록으로</a>
     """
     return render_page(str(escape(memo["title"])), body, wide=True)
 
