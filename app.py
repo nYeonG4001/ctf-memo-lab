@@ -24,7 +24,8 @@ app.config.update(
 DATABASE = os.environ.get("DATABASE", "memo.db")
 
 # !!! 아래 기본값은 전부 플레이스홀더입니다. 실제 게임에 쓰면 안 됩니다 !!!
-# 반드시 SECRET_KEY, ADMIN_PASSWORD, ADMIN_MEMO_CONTENT 환경변수로 덮어써서 실행하세요.
+# 반드시 SECRET_KEY, ADMIN_PASSWORD, EASY_FLAG_CONTENT, MID_FLAG_CONTENT, ADMIN_MEMO_CONTENT
+# 환경변수로 덮어써서 실행하세요.
 # (게임 운영 시에는 이 값들을 코드에 그대로 두지 마세요 — git 저장소에 커밋된 채로 두면
 #  참가자가 해킹 없이 소스만 읽고 정답을 알 수 있습니다.)
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -32,6 +33,16 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme_before_game")
 # 제목만 보고 플래그 메모를 특정할 수 없도록 평범한 제목을 씁니다 ("관리자 메모" 같은 티 나는 제목 지양).
 ADMIN_MEMO_TITLE = "인수인계"
 ADMIN_MEMO_CONTENT = os.environ.get("ADMIN_MEMO_CONTENT", "SBOB{replace_this_before_game}")
+
+# 다단계 플래그: 쉬운 단계(약한 비번 계정) -> 중간 단계(park_intern 메모) -> 최종(admin 인수인계).
+# 점수는 FLAG_POINTS에서 관리하고, submit_flag()/compute_scores()가 이 딕셔너리를 기준으로 채점합니다.
+EASY_FLAG_CONTENT = os.environ.get("EASY_FLAG_CONTENT", "SBOB{replace_this_easy_flag}")
+MID_FLAG_CONTENT = os.environ.get("MID_FLAG_CONTENT", "SBOB{replace_this_mid_flag}")
+FLAG_POINTS = {
+    EASY_FLAG_CONTENT: 30,
+    MID_FLAG_CONTENT: 50,
+    ADMIN_MEMO_CONTENT: 100,
+}
 
 # admin 계정 최초 생성 시 플래그 메모와 함께 만들어지는 미끼 메모들.
 # 플래그 메모가 목록에서 튀지 않도록 섞는 용도이니, 평범한 업무/일상 메모 톤으로 자유롭게 수정하세요.
@@ -77,9 +88,15 @@ DECOY_ADMIN_ACCOUNTS = [
 PARK_INTERN_USERNAME = "park_intern"
 PARK_INTERN_PASSWORD = f"park{datetime.now().year}"
 
-# 평범한 일반 유저 계정입니다. 계정을 탈취해도 진짜/가짜 플래그 없이 순수 미끼용 메모만 들어있습니다.
+# kim_dev 계정: 일부러 추측하기 쉬운 약한 비밀번호를 써서 "쉬운 단계" 플래그로 이어지는 계정입니다.
+# (로그인 잠금(is_login_locked)이 이미 걸려 있어 무차별 대입은 느리지만, 추측 자체는 쉽게 설계했습니다.)
+KIM_DEV_USERNAME = "kim_dev"
+KIM_DEV_PASSWORD = "kim1234"
+
+# 평범한 일반 유저 계정입니다. kim_dev/park_intern을 제외하면 진짜/가짜 플래그 없이 순수 미끼용
+# 메모만 들어있습니다.
 DECOY_NORMAL_ACCOUNTS = [
-    ("kim_dev", "kim_pw_1234"),
+    (KIM_DEV_USERNAME, KIM_DEV_PASSWORD),
     (PARK_INTERN_USERNAME, PARK_INTERN_PASSWORD),
     ("lee_designer", "lee_pw_1234"),
 ]
@@ -819,7 +836,15 @@ def init_db():
                         (user_id, title, content, random_recent_timestamp()),
                     )
 
-                # park_intern 계정에는 진짜 admin 비밀번호로 이어지는 단서를 하나 더 심습니다.
+                # kim_dev: 약한 비밀번호로 로그인하면 바로 보이는 "쉬운 단계" 플래그.
+                if username == KIM_DEV_USERNAME:
+                    db.execute(
+                        "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                        (user_id, "작업 노트", EASY_FLAG_CONTENT, random_recent_timestamp()),
+                    )
+
+                # park_intern 계정에는 진짜 admin 비밀번호로 이어지는 단서와,
+                # 그 자체로 채점되는 "중간 단계" 플래그를 함께 심습니다.
                 # ADMIN_PASSWORD를 그대로 참조하므로, 운영자가 환경변수를 바꾸면 자동으로 최신 값이 반영됩니다.
                 if username == PARK_INTERN_USERNAME:
                     db.execute(
@@ -830,6 +855,10 @@ def init_db():
                             f"관리자 계정 비번 기억 안 나서 메모: {ADMIN_PASSWORD}",
                             random_recent_timestamp(),
                         ),
+                    )
+                    db.execute(
+                        "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                        (user_id, "전달받은 자료", MID_FLAG_CONTENT, random_recent_timestamp()),
                     )
                 db.commit()
 
@@ -909,10 +938,12 @@ def compute_scores(db):
     ).fetchone()
     first_blood_user_id = first_blood_row["user_id"] if first_blood_row else None
 
-    correct_user_ids = {
-        row["user_id"]
-        for row in db.execute("SELECT DISTINCT user_id FROM submissions WHERE is_correct = 1")
-    }
+    # 다단계 플래그: 유저별로 맞춘 각 플래그의 점수를 합산합니다 (같은 플래그 중복 제출은
+    # submit_flag()에서 애초에 한 유저당 한 행만 쌓이도록 막아두었습니다).
+    correct_totals = {}
+    for row in db.execute("SELECT user_id, submitted_flag FROM submissions WHERE is_correct = 1"):
+        points = FLAG_POINTS.get(row["submitted_flag"], 0)
+        correct_totals[row["user_id"]] = correct_totals.get(row["user_id"], 0) + points
 
     # 가짜 플래그 감점은 "같은 가짜 플래그를 몇 번 냈든 최초 1회만" 적용하므로,
     # 유저별로 실제 FAKE_FLAGS에 해당하는 값만 종류별로 집계합니다.
@@ -935,11 +966,10 @@ def compute_scores(db):
     for u in users:
         score = 0
         first_blood = False
-        if u["id"] in correct_user_ids:
-            score += 100
-            if u["id"] == first_blood_user_id:
-                score += 20
-                first_blood = True
+        score += correct_totals.get(u["id"], 0)
+        if u["id"] == first_blood_user_id and u["id"] in correct_totals:
+            score += 20
+            first_blood = True
         score -= 10 * len(fake_hits.get(u["id"], ()))
         scanned = u["id"] in scanned_user_ids
         if scanned:
@@ -1430,35 +1460,44 @@ def admin_dashboard():
 def submit_flag():
     db = get_db()
     message = None
+    just_correct = False
 
-    already_correct = db.execute(
-        "SELECT id FROM submissions WHERE user_id = ? AND is_correct = 1",
-        (session["user_id"],),
-    ).fetchone()
+    solved_flags = {
+        row["submitted_flag"]
+        for row in db.execute(
+            "SELECT submitted_flag FROM submissions WHERE user_id = ? AND is_correct = 1",
+            (session["user_id"],),
+        )
+    }
+    all_solved = FLAG_POINTS.keys() <= solved_flags
 
     if request.method == "POST":
         submitted = request.form.get("flag", "").strip()
 
-        if already_correct:
-            message = "이미 맞추셨습니다."
-        elif not submitted:
+        if not submitted:
             message = "플래그를 입력해주세요."
-        elif submitted == ADMIN_MEMO_CONTENT:
-            is_first_blood = (
-                db.execute("SELECT id FROM submissions WHERE is_correct = 1 LIMIT 1").fetchone()
-                is None
-            )
-            db.execute(
-                "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 1, ?)",
-                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            )
-            db.commit()
-            already_correct = True
-            message = (
-                "정답입니다! +100점 (First Blood! +20점 추가)"
-                if is_first_blood
-                else "정답입니다! +100점"
-            )
+        elif submitted in FLAG_POINTS:
+            if submitted in solved_flags:
+                message = "이미 맞추신 플래그입니다."
+            else:
+                points = FLAG_POINTS[submitted]
+                is_first_blood = (
+                    db.execute("SELECT id FROM submissions WHERE is_correct = 1 LIMIT 1").fetchone()
+                    is None
+                )
+                db.execute(
+                    "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 1, ?)",
+                    (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                )
+                db.commit()
+                solved_flags.add(submitted)
+                all_solved = FLAG_POINTS.keys() <= solved_flags
+                just_correct = True
+                message = (
+                    f"정답입니다! +{points}점 (First Blood! +20점 추가)"
+                    if is_first_blood
+                    else f"정답입니다! +{points}점"
+                )
         elif submitted in FAKE_FLAGS:
             dup = db.execute(
                 "SELECT id FROM submissions WHERE user_id = ? AND submitted_flag = ? AND is_correct = 0",
@@ -1484,8 +1523,8 @@ def submit_flag():
 
     message_html = f'<p class="msg">{escape(message)}</p>' if message else ""
 
-    already_correct_notice = (
-        '<p class="msg">이미 정답을 맞추셨습니다.</p>' if already_correct and not message else ""
+    solved_notice = (
+        '<p class="msg">모든 단계를 이미 맞추셨습니다.</p>' if all_solved and not message else ""
     )
 
     body = f"""
@@ -1494,7 +1533,7 @@ def submit_flag():
         <a href="{url_for('scoreboard')}">점수판</a>
     </div>
     {message_html}
-    {already_correct_notice}
+    {solved_notice}
     <form method="post">
         {csrf_field()}
         <div class="field">
@@ -1504,7 +1543,7 @@ def submit_flag():
     </form>
     <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
-    if already_correct:
+    if just_correct or all_solved:
         submit_mascot = "clawd-juggling.gif"
     elif message:
         submit_mascot = "clawd-idle.gif"
@@ -1548,7 +1587,13 @@ def warn_if_config_stale():
         print(f"[경고] ADMIN_PASSWORD가 기본 플레이스홀더({ADMIN_PASSWORD!r})입니다. "
               "게임 전 환경변수로 반드시 바꿔주세요.")
     if ADMIN_MEMO_CONTENT == "SBOB{replace_this_before_game}":
-        print(f"[경고] ADMIN_MEMO_CONTENT(플래그)가 기본 플레이스홀더({ADMIN_MEMO_CONTENT!r})입니다. "
+        print(f"[경고] ADMIN_MEMO_CONTENT(최종 플래그)가 기본 플레이스홀더({ADMIN_MEMO_CONTENT!r})입니다. "
+              "게임 전 환경변수로 반드시 바꿔주세요.")
+    if EASY_FLAG_CONTENT == "SBOB{replace_this_easy_flag}":
+        print(f"[경고] EASY_FLAG_CONTENT(쉬운 단계 플래그)가 기본 플레이스홀더({EASY_FLAG_CONTENT!r})입니다. "
+              "게임 전 환경변수로 반드시 바꿔주세요.")
+    if MID_FLAG_CONTENT == "SBOB{replace_this_mid_flag}":
+        print(f"[경고] MID_FLAG_CONTENT(중간 단계 플래그)가 기본 플레이스홀더({MID_FLAG_CONTENT!r})입니다. "
               "게임 전 환경변수로 반드시 바꿔주세요.")
 
     if not os.path.exists(DATABASE):
@@ -1591,13 +1636,15 @@ if __name__ == "__main__":
 #      기본적으로 5000번 포트를 점유해 127.0.0.1:5000 접속 시 403 오류가 날 수 있습니다.
 #
 # 모의해킹 게임 운영 시 보안 체크리스트:
-#    - !!! 필수 !!! SECRET_KEY, ADMIN_PASSWORD, ADMIN_MEMO_CONTENT 환경변수를
-#      게임 시작 전 반드시 실제 값으로 설정하세요.
+#    - !!! 필수 !!! SECRET_KEY, ADMIN_PASSWORD, EASY_FLAG_CONTENT, MID_FLAG_CONTENT,
+#      ADMIN_MEMO_CONTENT 환경변수를 게임 시작 전 반드시 실제 값으로 설정하세요.
 #      코드 상단의 기본값(changeme_before_game, SBOB{replace_this_before_game} 등)은
 #      전부 플레이스홀더이며, 이미 공개 저장소에 커밋되어 있어 그대로 쓰면 안 됩니다.
 #      예) SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))") \
 #          ADMIN_PASSWORD="원하는_관리자_비번" \
-#          ADMIN_MEMO_CONTENT="SBOB{실제_플래그}" \
+#          EASY_FLAG_CONTENT="SBOB{쉬운_단계_플래그}" \
+#          MID_FLAG_CONTENT="SBOB{중간_단계_플래그}" \
+#          ADMIN_MEMO_CONTENT="SBOB{최종_플래그}" \
 #          ./.venv/bin/python app.py
 #    - FLASK_DEBUG는 게임 중에는 설정하지 마세요 (기본값 False가 안전합니다).
 #    - 게임 시작 전 기존 memo.db를 삭제하고 새로 시작하면 admin 계정/플래그가 새 값으로 재생성됩니다.

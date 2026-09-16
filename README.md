@@ -9,7 +9,9 @@ Flask + SQLite로 만든 회원가입/로그인/메모 앱 (`app.py` 파일 하�
 ```
 SECRET_KEY=랜덤한_긴_문자열
 ADMIN_PASSWORD=관리자_비밀번호
-ADMIN_MEMO_CONTENT=SBOB{실제_값}
+EASY_FLAG_CONTENT=SBOB{쉬운_단계_플래그}
+MID_FLAG_CONTENT=SBOB{중간_단계_플래그}
+ADMIN_MEMO_CONTENT=SBOB{최종_플래그}
 ```
 
 `SECRET_KEY`는 아래 명령으로 생성할 수 있습니다.
