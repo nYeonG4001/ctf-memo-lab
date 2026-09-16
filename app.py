@@ -157,7 +157,7 @@ PAGE_STYLE = """
     * { box-sizing: border-box; }
     body {
         margin: 0;
-        background: #FFFBF2;
+        background: #f7f7f5;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: #37352f;
     }
@@ -218,7 +218,7 @@ PAGE_STYLE = """
     input[type="password"] {
         width: 100%;
         padding: 8px 10px;
-        border: 1px solid #EDE0C8;
+        border: 1px solid #e0e0e0;
         border-radius: 6px;
         font-size: 14px;
         font-family: inherit;
@@ -226,12 +226,12 @@ PAGE_STYLE = """
     input[type="text"]:focus,
     input[type="password"]:focus {
         outline: none;
-        border-color: #B45309;
+        border-color: #2f80ed;
     }
     input[type="submit"] {
         width: 100%;
         padding: 10px;
-        background: #B45309;
+        background: #2f80ed;
         color: #ffffff;
         border: none;
         border-radius: 6px;
@@ -240,10 +240,10 @@ PAGE_STYLE = """
         cursor: pointer;
     }
     input[type="submit"]:hover {
-        background: #92400E;
+        background: #2569c4;
     }
     a {
-        color: #B45309;
+        color: #2f80ed;
         text-decoration: none;
         font-size: 14px;
     }
@@ -275,7 +275,7 @@ PAGE_STYLE = """
         text-align: center;
         padding: 10px;
         border-radius: 6px;
-        border: 1px solid #EDE0C8;
+        border: 1px solid #e0e0e0;
         background: #ffffff;
         color: #37352f;
         font-size: 14px;
@@ -286,17 +286,17 @@ PAGE_STYLE = """
     }
     .links a.primary,
     .links button.primary {
-        background: #B45309;
-        border-color: #B45309;
+        background: #2f80ed;
+        border-color: #2f80ed;
         color: #ffffff;
     }
     .links a.primary:hover,
     .links button.primary:hover {
-        background: #92400E;
+        background: #2569c4;
     }
     .links a:not(.primary):hover,
     .links button:not(.primary):hover {
-        border-color: #B45309;
+        border-color: #2f80ed;
         text-decoration: none;
     }
     .card.wide {
@@ -309,7 +309,7 @@ PAGE_STYLE = """
         width: 100%;
         min-height: 160px;
         padding: 8px 10px;
-        border: 1px solid #EDE0C8;
+        border: 1px solid #e0e0e0;
         border-radius: 6px;
         font-size: 14px;
         font-family: inherit;
@@ -317,7 +317,7 @@ PAGE_STYLE = """
     }
     textarea:focus {
         outline: none;
-        border-color: #B45309;
+        border-color: #2f80ed;
     }
     .toolbar {
         display: flex;
@@ -348,7 +348,7 @@ PAGE_STYLE = """
         font-size: 15px;
     }
     .memo-item a:hover {
-        color: #B45309;
+        color: #2f80ed;
         text-decoration: none;
     }
     .memo-date {
@@ -376,7 +376,7 @@ PAGE_STYLE = """
         width: 100%;
         padding: 10px;
         border-radius: 6px;
-        border: 1px solid #EDE0C8;
+        border: 1px solid #e0e0e0;
         background: #ffffff;
         color: #37352f;
         font-size: 14px;
@@ -387,14 +387,14 @@ PAGE_STYLE = """
     }
     .btn-row a:hover,
     .btn-row button:hover {
-        border-color: #B45309;
+        border-color: #2f80ed;
         text-decoration: none;
     }
     .badge {
         display: inline-block;
         padding: 2px 8px;
         border-radius: 6px;
-        background: #B45309;
+        background: #2f80ed;
         color: #ffffff;
         font-size: 11px;
         margin-left: 6px;
@@ -412,7 +412,7 @@ PAGE_STYLE = """
         color: #37352f;
     }
     .rank-number.rank-first {
-        color: #B45309;
+        color: #2f80ed;
     }
 </style>
 """
@@ -434,7 +434,7 @@ def render_page(title, body, wide=False):
 </head>
 <body>
 <div class="topbar">
-    <a href="{url_for('index')}" class="topbar-brand">🧈 메모</a>
+    <a href="{url_for('index')}" class="topbar-brand">메모</a>
     <div class="topbar-right">{topbar_right}</div>
 </div>
 <div class="page">
