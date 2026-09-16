@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, Response, abort, g, redirect, request, session, url_for
+from flask import Flask, Response, abort, g, jsonify, redirect, request, session, url_for
 from markupsafe import escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -137,7 +137,7 @@ def csrf_field():
 
 @app.before_request
 def check_csrf():
-    if request.method == "POST":
+    if request.method == "POST" and not request.path.startswith("/api/"):
         token = session.get("csrf_token")
         submitted = request.form.get("csrf_token")
         if not token or not submitted or not secrets.compare_digest(token, submitted):
@@ -150,6 +150,13 @@ def set_security_headers(response):
     response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    if request.path.startswith("/api/"):
+        return jsonify(error="note not found"), 404
+    return error
 
 
 PAGE_STYLE = """
@@ -551,7 +558,7 @@ def random_recent_timestamp(min_days_ago=1, max_days_ago=21):
     # 시드 데이터가 전부 같은 시각에 생성된 티가 나지 않도록, 최근 며칠~몇 주 사이로 흩뿌립니다.
     total_minutes = random.randint(min_days_ago * 24 * 60, max_days_ago * 24 * 60)
     dt = datetime.now() - timedelta(minutes=total_minutes)
-    return dt.strftime("%Y-%m-%d %H:%M")
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def init_db():
@@ -576,6 +583,7 @@ def init_db():
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
             """
@@ -594,6 +602,7 @@ def init_db():
         )
         ensure_column(db, "users", "role", "role TEXT NOT NULL DEFAULT 'user'")
         ensure_column(db, "users", "created_at", "created_at TEXT")
+        ensure_column(db, "memos", "updated_at", "updated_at TEXT")
         db.commit()
 
         admin = db.execute(
@@ -606,7 +615,7 @@ def init_db():
                     ADMIN_USERNAME,
                     generate_password_hash(ADMIN_PASSWORD),
                     "admin",
-                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
             db.commit()
@@ -693,12 +702,27 @@ def init_db():
                     )
                 db.commit()
 
+        db.execute(
+            "UPDATE memos SET updated_at = created_at WHERE updated_at IS NULL"
+        )
+        db.commit()
+
 
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if "user_id" not in session:
             return redirect(url_for("login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def api_login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify(error="authentication required"), 401
         return view(*args, **kwargs)
 
     return wrapped
@@ -725,6 +749,16 @@ def get_own_memo(memo_id):
     if memo is None:
         abort(404)
     return memo
+
+
+def memo_to_note(memo):
+    return {
+        "id": memo["id"],
+        "title": memo["title"],
+        "body": memo["content"],
+        "created_at": memo["created_at"],
+        "updated_at": memo["updated_at"],
+    }
 
 
 def compute_scores(db):
@@ -880,7 +914,7 @@ def signup():
         hashed_password = generate_password_hash(password)
         db.execute(
             "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
-            (username, hashed_password, "user", datetime.now().strftime("%Y-%m-%d %H:%M")),
+            (username, hashed_password, "user", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         db.commit()
         return redirect(url_for("login"))
@@ -944,6 +978,61 @@ def logout():
     session.pop("user_id", None)
     session.pop("role", None)
     return redirect(url_for("index"))
+
+
+@app.route("/api/notes")
+@api_login_required
+def api_note_list():
+    db = get_db()
+    memos = db.execute(
+        """
+        SELECT id, title, content, created_at, updated_at
+        FROM memos
+        WHERE user_id = ?
+        ORDER BY id DESC
+        """,
+        (session["user_id"],),
+    ).fetchall()
+    return jsonify(notes=[memo_to_note(memo) for memo in memos])
+
+
+@app.route("/api/notes", methods=["POST"])
+@api_login_required
+def api_note_create():
+    if not request.is_json:
+        return jsonify(error="Content-Type must be application/json"), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify(error="title is required"), 400
+
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return jsonify(error="title is required and must not be empty"), 400
+
+    body = payload.get("body", "")
+    if not isinstance(body, str):
+        return jsonify(error="body must be a string"), 400
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db = get_db()
+    cursor = db.execute(
+        """
+        INSERT INTO memos (user_id, title, content, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (session["user_id"], title, body, timestamp, timestamp),
+    )
+    db.commit()
+
+    memo = get_own_memo(cursor.lastrowid)
+    return jsonify(memo_to_note(memo)), 201
+
+
+@app.route("/api/notes/<int:memo_id>")
+@api_login_required
+def api_note_detail(memo_id):
+    return jsonify(memo_to_note(get_own_memo(memo_id)))
 
 
 @app.route("/memos")
@@ -1013,14 +1102,13 @@ def memo_new():
             return render_page("새 메모", body, wide=True)
 
         db = get_db()
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
-            "INSERT INTO memos (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
-            (
-                session["user_id"],
-                title,
-                content,
-                datetime.now().strftime("%Y-%m-%d %H:%M"),
-            ),
+            """
+            INSERT INTO memos (user_id, title, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (session["user_id"], title, content, created_at, created_at),
         )
         db.commit()
         return redirect(url_for("memo_list"))
@@ -1096,9 +1184,14 @@ def memo_edit(memo_id):
             return render_page("메모 수정", body, wide=True)
 
         db = get_db()
+        updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
-            "UPDATE memos SET title = ?, content = ? WHERE id = ? AND user_id = ?",
-            (title, content, memo_id, session["user_id"]),
+            """
+            UPDATE memos
+            SET title = ?, content = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (title, content, updated_at, memo_id, session["user_id"]),
         )
         db.commit()
         return redirect(url_for("memo_detail", memo_id=memo_id))
@@ -1187,7 +1280,7 @@ def submit_flag():
             )
             db.execute(
                 "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 1, ?)",
-                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
             db.commit()
             already_correct = True
@@ -1203,7 +1296,7 @@ def submit_flag():
             ).fetchone()
             db.execute(
                 "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 0, ?)",
-                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
             db.commit()
             message = (
@@ -1214,7 +1307,7 @@ def submit_flag():
         else:
             db.execute(
                 "INSERT INTO submissions (user_id, submitted_flag, is_correct, created_at) VALUES (?, ?, 0, ?)",
-                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M")),
+                (session["user_id"], submitted, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
             db.commit()
             message = "오답입니다."
