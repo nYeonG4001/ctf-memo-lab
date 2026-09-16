@@ -97,6 +97,15 @@ MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_SECONDS = 60
 _login_attempts = {}
 
+# GET /api/notes/<id>를 유저 하나가 짧은 시간에 반복 호출해 ID를 무작위로 훑는 것을 막기 위한
+# 별도의 카운터입니다 (로그인 잠금(_login_attempts)과는 완전히 독립적입니다).
+API_NOTE_DETAIL_RATE_LIMIT = 15
+API_NOTE_DETAIL_RATE_WINDOW_SECONDS = 10
+_api_note_detail_requests = {}
+
+MAX_TITLE_LENGTH = 200
+MAX_BODY_LENGTH = 5000
+
 
 def _login_attempt_key(username):
     # IP + 아이디로 묶어서, 공격자가 아이디만 알아도 진짜 사용자를 잠그지 못하게 합니다.
@@ -121,6 +130,18 @@ def record_failed_login(username):
 
 def clear_login_attempts(username):
     _login_attempts.pop(_login_attempt_key(username), None)
+
+
+def is_api_note_detail_rate_limited(user_id):
+    now = time.time()
+    attempts = [
+        t
+        for t in _api_note_detail_requests.get(user_id, [])
+        if now - t < API_NOTE_DETAIL_RATE_WINDOW_SECONDS
+    ]
+    attempts.append(now)
+    _api_note_detail_requests[user_id] = attempts
+    return len(attempts) > API_NOTE_DETAIL_RATE_LIMIT
 
 
 def get_csrf_token():
@@ -156,6 +177,15 @@ def set_security_headers(response):
 def handle_not_found(error):
     if request.path.startswith("/api/"):
         return jsonify(error="note not found"), 404
+    return error
+
+
+@app.errorhandler(500)
+def handle_server_error(error):
+    # 예상 못한 예외가 나도 /api/*는 스택트레이스/SQL 에러 없이 정형화된 JSON만 내려줍니다.
+    # FLASK_DEBUG=1일 때는 Flask가 이 핸들러 대신 인터랙티브 디버거를 띄웁니다.
+    if request.path.startswith("/api/"):
+        return jsonify(error="internal server error"), 500
     return error
 
 
@@ -1009,10 +1039,14 @@ def api_note_create():
     title = payload.get("title")
     if not isinstance(title, str) or not title.strip():
         return jsonify(error="title is required and must not be empty"), 400
+    if len(title) > MAX_TITLE_LENGTH:
+        return jsonify(error="title too long"), 400
 
     body = payload.get("body", "")
     if not isinstance(body, str):
         return jsonify(error="body must be a string"), 400
+    if len(body) > MAX_BODY_LENGTH:
+        return jsonify(error="body too long"), 400
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     db = get_db()
@@ -1032,6 +1066,8 @@ def api_note_create():
 @app.route("/api/notes/<int:memo_id>")
 @api_login_required
 def api_note_detail(memo_id):
+    if is_api_note_detail_rate_limited(session["user_id"]):
+        return jsonify(error="too many requests"), 429
     return jsonify(memo_to_note(get_own_memo(memo_id)))
 
 
@@ -1081,10 +1117,18 @@ def memo_new():
         title = request.form["title"]
         content = request.form["content"]
 
+        error_msg = None
         if not title or not content:
+            error_msg = "제목과 내용을 모두 입력해주세요."
+        elif len(title) > MAX_TITLE_LENGTH:
+            error_msg = f"제목은 {MAX_TITLE_LENGTH}자를 넘을 수 없습니다."
+        elif len(content) > MAX_BODY_LENGTH:
+            error_msg = f"내용은 {MAX_BODY_LENGTH}자를 넘을 수 없습니다."
+
+        if error_msg:
             body = f"""
             <h1>새 메모</h1>
-            <p class="msg">제목과 내용을 모두 입력해주세요.</p>
+            <p class="msg">{error_msg}</p>
             <form method="post">
                 {csrf_field()}
                 <div class="field">
