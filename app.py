@@ -271,7 +271,7 @@ PAGE_STYLE = """
     }
     .bottom-mascot {
         position: fixed;
-        bottom: 12px;
+        bottom: 32px;
         left: 20px;
         z-index: 10;
         width: 151px;
@@ -623,7 +623,7 @@ def render_page(title, body, wide=False, mascot_active="clawd-headphones-groove.
     const typingSrc = mascot.dataset.typingSrc;
     const idleSrc = mascot.dataset.idleSrc;
     const IDLE_MS = 5000;
-    const TYPING_REVERT_MS = 600;
+    const TYPING_REVERT_MS = 1500;
     let typingTimer = null;
     let idleTimer = null;
 
@@ -1504,7 +1504,12 @@ def submit_flag():
     </form>
     <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
-    submit_mascot = "clawd-juggling.gif" if already_correct else "clawd-building.gif"
+    if already_correct:
+        submit_mascot = "clawd-juggling.gif"
+    elif message:
+        submit_mascot = "clawd-idle.gif"
+    else:
+        submit_mascot = "clawd-building.gif"
     return render_page("플래그 제출", body, wide=True, mascot_active=submit_mascot)
 
 
