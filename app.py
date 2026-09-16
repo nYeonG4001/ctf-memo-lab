@@ -268,6 +268,9 @@ PAGE_STYLE = """
     .links + .links {
         margin-top: 12px;
     }
+    .links:has(a.hero) + .links {
+        margin-top: 24px;
+    }
     .links a,
     .links button {
         display: block;
@@ -378,6 +381,38 @@ PAGE_STYLE = """
         text-decoration: none;
     }
     .memo-date {
+        font-size: 12px;
+        color: #9b9a97;
+    }
+    .memo-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 12px;
+    }
+    .memo-card {
+        display: block;
+        background: #ffffff;
+        border: 1px solid #ededec;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        color: #37352f;
+        text-decoration: none;
+    }
+    .memo-card:hover {
+        border-color: #2f80ed;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        text-decoration: none;
+    }
+    .memo-card-title {
+        font-size: 15px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .memo-card-date {
         font-size: 12px;
         color: #9b9a97;
     }
@@ -904,14 +939,14 @@ def memo_list():
     if memos:
         items = "".join(
             f"""
-            <li class="memo-item">
-                <a href="{url_for('memo_detail', memo_id=memo['id'])}">{escape(memo['title'])}</a>
-                <span class="memo-date">{memo['created_at']}</span>
-            </li>
+            <a href="{url_for('memo_detail', memo_id=memo['id'])}" class="memo-card">
+                <div class="memo-card-title">{escape(memo['title'])}</div>
+                <div class="memo-card-date">{memo['created_at']}</div>
+            </a>
             """
             for memo in memos
         )
-        list_html = f'<ul class="memo-list">{items}</ul>'
+        list_html = f'<div class="memo-grid">{items}</div>'
     else:
         list_html = f"""
         <p class="msg">아직 메모가 없어요. 첫 메모를 남겨보세요!</p>
