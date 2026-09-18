@@ -25,3 +25,6 @@ data/
 
 # OMC 로컬 상태
 .omc/
+
+# OMX 로컬 상태
+.omx/
