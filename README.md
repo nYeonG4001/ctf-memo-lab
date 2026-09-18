@@ -63,4 +63,5 @@ export $(grep -v '^#' .env | xargs)
 - 회원가입 / 로그인 / 로그아웃 (세션 기반)
 - 메모 작성 / 조회 / 수정 / 삭제 (본인 것만)
 - 관리자 페이지 (`/admin`, admin 계정만 접근 가능)
-- 플래그 제출 (`/submit`) / 점수판 (`/scoreboard`)
+- JSON API (`GET/POST /api/notes`, `GET /api/notes/<id>`) — 세션 쿠키 인증, 속도 제한 포함
+- 플래그 제출 (`/submit`) / 점수판 (`/scoreboard`) — 다단계 플래그 점수제
