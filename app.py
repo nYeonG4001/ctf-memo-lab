@@ -286,15 +286,6 @@ PAGE_STYLE = """
         display: flex;
         justify-content: center;
     }
-    .bottom-mascot {
-        position: fixed;
-        bottom: 32px;
-        left: 20px;
-        z-index: 10;
-        width: 151px;
-        height: auto;
-        pointer-events: none;
-    }
     .card {
         background: #ffffff;
         border-radius: 8px;
@@ -604,7 +595,7 @@ PAGE_STYLE = """
 """
 
 
-def render_page(title, body, wide=False, mascot_active="clawd-headphones-groove.gif"):
+def render_page(title, body, wide=False):
     card_class = "card wide" if wide else "card"
     topbar_html = ""
     if "username" in session:
@@ -623,60 +614,11 @@ def render_page(title, body, wide=False, mascot_active="clawd-headphones-groove.
 {PAGE_STYLE}
 </head>
 <body>
-<img id="bottom-mascot" class="bottom-mascot" src="{url_for('static', filename=mascot_active)}"
-     data-active-src="{url_for('static', filename=mascot_active)}"
-     data-typing-src="{url_for('static', filename='clawd-typing.gif')}"
-     data-idle-src="{url_for('static', filename='clawd-thinking.gif')}" alt="">
 {topbar_html}<div class="page">
 <div class="{card_class}">
 {body}
 </div>
 </div>
-<script>
-(() => {{
-    const mascot = document.getElementById('bottom-mascot');
-    if (!mascot) return;
-    const activeSrc = mascot.dataset.activeSrc;
-    const typingSrc = mascot.dataset.typingSrc;
-    const idleSrc = mascot.dataset.idleSrc;
-    const IDLE_MS = 5000;
-    const TYPING_REVERT_MS = 1500;
-    let typingTimer = null;
-    let idleTimer = null;
-
-    function setSrc(src) {{
-        if (mascot.getAttribute('src') !== src) mascot.setAttribute('src', src);
-    }}
-
-    function scheduleIdle() {{
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => setSrc(idleSrc), IDLE_MS);
-    }}
-
-    function onActivity() {{
-        if (!typingTimer) setSrc(activeSrc);
-        scheduleIdle();
-    }}
-
-    document.addEventListener('input', (event) => {{
-        const el = event.target;
-        if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
-        setSrc(typingSrc);
-        clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => {{
-            typingTimer = null;
-            setSrc(activeSrc);
-        }}, TYPING_REVERT_MS);
-        scheduleIdle();
-    }});
-
-    ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'].forEach((evt) => {{
-        document.addEventListener(evt, onActivity, {{ passive: true }});
-    }});
-
-    scheduleIdle();
-}})();
-</script>
 </body>
 </html>"""
 
@@ -1543,13 +1485,7 @@ def submit_flag():
     </form>
     <a href="{url_for('index')}" class="back-link">홈으로</a>
     """
-    if just_correct or all_solved:
-        submit_mascot = "clawd-juggling.gif"
-    elif message:
-        submit_mascot = "clawd-idle.gif"
-    else:
-        submit_mascot = "clawd-building.gif"
-    return render_page("플래그 제출", body, wide=True, mascot_active=submit_mascot)
+    return render_page("플래그 제출", body, wide=True)
 
 
 @app.route("/scoreboard")
